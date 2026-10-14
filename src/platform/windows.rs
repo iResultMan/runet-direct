@@ -147,17 +147,22 @@ pub fn installed_from(rows: &[RouteRow], candidates: &HashSet<Cidr>, ours: &[Upl
 /// A netsh script for `netsh -f`. Removals first, then additions.
 pub fn netsh_script(fam: Family, uplink: &Uplink, plan: &Plan) -> String {
     let mut s = String::from(if fam == Family::V6 { "interface ipv6\n" } else { "interface ipv4\n" });
-    for r in &plan.remove {
-        if let Some(via) = &r.via {
-            s.push_str(&format!("delete route prefix={} interface={} nexthop={via} store=active\n", r.prefix, r.dev));
+    let delete = |s: &mut String, rows: &[&Installed]| {
+        for r in rows {
+            if let Some(via) = &r.via {
+                s.push_str(&format!("delete route prefix={} interface={} nexthop={via} store=active\n", r.prefix, r.dev));
+            }
         }
-    }
+    };
+    let (replaced, stale) = plan.split_removals();
+    delete(&mut s, &replaced);
     for p in &plan.add {
         match &uplink.via {
             Some(via) => s.push_str(&format!("add route prefix={p} interface={} nexthop={via} metric=1 store=active\n", uplink.dev)),
             None => s.push_str(&format!("add route prefix={p} interface={} metric=1 store=active\n", uplink.dev)),
         }
     }
+    delete(&mut s, &stale);
     s
 }
 
@@ -372,18 +377,22 @@ Active Routes:\n\
     }
 
     #[test]
-    fn netsh_script_removes_then_adds() {
+    fn netsh_script_replaces_first_then_adds_then_drops_stale_routes() {
         let up = Uplink { dev: "12".into(), via: Some("192.168.1.1".into()) };
         let plan = Plan {
             add: vec![c("5.228.0.0/16")],
-            remove: vec![Installed { prefix: c("9.0.0.0/8"), via: Some("10.9.9.9".into()), dev: "7".into() }],
+            remove: vec![
+                Installed { prefix: c("9.0.0.0/8"), via: Some("10.9.9.9".into()), dev: "7".into() },
+                Installed { prefix: c("5.228.0.0/16"), via: Some("10.9.9.9".into()), dev: "7".into() },
+            ],
             keep: 0,
         };
         assert_eq!(
             netsh_script(Family::V4, &up, &plan),
             "interface ipv4\n\
-             delete route prefix=9.0.0.0/8 interface=7 nexthop=10.9.9.9 store=active\n\
-             add route prefix=5.228.0.0/16 interface=12 nexthop=192.168.1.1 metric=1 store=active\n"
+             delete route prefix=5.228.0.0/16 interface=7 nexthop=10.9.9.9 store=active\n\
+             add route prefix=5.228.0.0/16 interface=12 nexthop=192.168.1.1 metric=1 store=active\n\
+             delete route prefix=9.0.0.0/8 interface=7 nexthop=10.9.9.9 store=active\n"
         );
         let up6 = Uplink { dev: "12".into(), via: Some("fe80::1".into()) };
         let plan6 = Plan { add: vec![c("2a00:1450::/32")], remove: vec![], keep: 0 };

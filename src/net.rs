@@ -58,6 +58,15 @@ impl Plan {
     pub fn is_empty(&self) -> bool {
         self.add.is_empty() && self.remove.is_empty()
     }
+
+    /// Split the removals into routes that are being replaced (same prefix is added again, so they must
+    /// go first where a prefix can exist only once) and stale ones. Stale routes are removed after the
+    /// additions, so a replacement block (for example an aggregate) is in place before the blocks it
+    /// covers disappear: traffic never sees a gap.
+    pub fn split_removals(&self) -> (Vec<&Installed>, Vec<&Installed>) {
+        let added: HashSet<&Cidr> = self.add.iter().collect();
+        self.remove.iter().partition(|r| added.contains(&r.prefix))
+    }
 }
 
 pub trait Net {
@@ -140,6 +149,19 @@ mod tests {
     }
     fn inst(p: &str, via: &str, dev: &str) -> Installed {
         Installed { prefix: c(p), via: Some(via.into()), dev: dev.into() }
+    }
+
+    #[test]
+    fn stale_removals_come_after_the_additions() {
+        let plan = Plan {
+            add: vec![c("5.0.0.0/8")],
+            remove: vec![inst("5.0.0.0/8", "10.0.0.254", "eth0"), inst("6.0.0.0/8", "10.0.0.1", "eth0")],
+            keep: 0,
+        };
+        let (replaced, stale) = plan.split_removals();
+        assert_eq!((replaced.len(), stale.len()), (1, 1));
+        assert_eq!(replaced[0].prefix, c("5.0.0.0/8"));
+        assert_eq!(stale[0].prefix, c("6.0.0.0/8"));
     }
 
     #[test]

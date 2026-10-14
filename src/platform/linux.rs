@@ -333,13 +333,14 @@ impl Net for Linux {
 
     fn apply(&self, cfg: &Config, fam: Family, uplink: &Uplink, plan: &Plan) -> Result<(), String> {
         let table = cfg.routing.table;
-        let replaced: HashSet<&Cidr> = plan.add.iter().collect();
+        // `replace` swaps a route atomically, so only stale routes need deleting, and they go last.
+        let (_, stale) = plan.split_removals();
         let mut script = String::new();
-        for r in plan.remove.iter().filter(|r| !replaced.contains(&r.prefix)) {
-            script.push_str(&route_line(&r.prefix, &r.via, &r.dev, table, "del"));
-        }
         for p in &plan.add {
             script.push_str(&route_line(p, &uplink.via, &uplink.dev, table, "replace"));
+        }
+        for r in stale {
+            script.push_str(&route_line(&r.prefix, &r.via, &r.dev, table, "del"));
         }
         // -force keeps going after a failing line (e.g. deleting a route that is already gone).
         match util::run_stdin("ip", &[fam.ip_flag(), "-force", "-batch", "-"], &script) {

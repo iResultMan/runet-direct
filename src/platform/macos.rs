@@ -201,9 +201,12 @@ impl Net for MacOs {
     }
 
     fn apply(&self, _: &Config, _: Family, uplink: &Uplink, plan: &Plan) -> Result<(), String> {
-        let removes = plan.remove.iter().map(|r| route_args("delete", &r.prefix, &r.via, &r.dev)).collect();
-        let _ = run_routes(removes); // deleting something already gone is not an error worth stopping for
-        run_routes(plan.add.iter().map(|p| route_args("add", p, &uplink.via, &uplink.dev)).collect())
+        let (replaced, stale) = plan.split_removals();
+        let delete = |rows: Vec<&Installed>| rows.iter().map(|r| route_args("delete", &r.prefix, &r.via, &r.dev)).collect::<Vec<_>>();
+        let _ = run_routes(delete(replaced)); // deleting something already gone is not an error worth stopping for
+        let added = run_routes(plan.add.iter().map(|p| route_args("add", p, &uplink.via, &uplink.dev)).collect());
+        let _ = run_routes(delete(stale));
+        added
     }
 
     fn clear(&self, cfg: &Config, fam: Family, candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Result<usize, String> {
