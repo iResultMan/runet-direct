@@ -1,0 +1,23 @@
+[package]
+name = "runet-direct"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "Keeps Russian-internet traffic off your VPN: a cross-platform background service plus CLI"
+license = "MIT"
+repository = "https://github.com/iResultMan/runet-direct"
+readme = "README.md"
+keywords = ["vpn", "routing", "split-tunnel", "russia", "service"]
+categories = ["command-line-utilities", "network-programming"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

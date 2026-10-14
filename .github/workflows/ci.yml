@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  linux-e2e:
+    name: Linux end-to-end (network namespace + systemd service)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build
+      - name: Routing behaviour in a throw-away network namespace
+        run: sudo tests/linux-netns.sh target/debug/runet-direct
+      - name: Service lifecycle (disposable runner; downloads the real RIPE file)
+        run: sudo -E tests/linux-service.sh target/debug/runet-direct
+        env:
+          RUNET_TEST_DISPOSABLE: "1"
+
+  # Real-machine smoke tests for the systems that cannot be exercised in a namespace.
+  # Hosted runners are disposable and run as administrator/root.
+  smoke:
+    name: install smoke test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build
+      - name: macOS
+        if: runner.os == 'macOS'
+        run: |
+          sudo ./target/debug/runet-direct install
+          sudo /usr/local/bin/runet-direct status
+          sudo /usr/local/bin/runet-direct check 213.59.1.1
+          sudo /usr/local/bin/runet-direct stop
+          sudo /usr/local/bin/runet-direct start
+          sudo /usr/local/bin/runet-direct uninstall --purge
+      - name: Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\target\debug\runet-direct.exe install
+          & "$env:ProgramFiles\runet-direct\runet-direct.exe" status
+          & "$env:ProgramFiles\runet-direct\runet-direct.exe" check 213.59.1.1
+          & "$env:ProgramFiles\runet-direct\runet-direct.exe" stop
+          & "$env:ProgramFiles\runet-direct\runet-direct.exe" start
+          & "$env:ProgramFiles\runet-direct\runet-direct.exe" uninstall --purge

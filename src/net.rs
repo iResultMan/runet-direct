@@ -1,0 +1,192 @@
+//! The operating-system boundary. `Net` is everything the engine needs from the OS;
+//! `make_plan` is the pure diff between the wanted and the installed routes.
+
+use crate::cidr::Cidr;
+use crate::config::Config;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+
+/// The physical (non-tunnel) way out: a gateway reachable over a real interface.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Uplink {
+    /// Interface name (Windows: interface index).
+    pub dev: String,
+    /// Next hop; `None` for point-to-point links without a gateway address.
+    pub via: Option<String>,
+}
+
+impl Uplink {
+    pub fn describe(&self) -> String {
+        match &self.via {
+            Some(v) => format!("{v} via {}", self.dev),
+            None => format!("dev {}", self.dev),
+        }
+    }
+
+    /// Does a route with this next hop and interface already use this uplink?
+    /// An empty interface means "not known" (Windows `route print`) and matches anything.
+    pub fn matches(&self, via: &Option<String>, dev: &str) -> bool {
+        self.via == *via && (dev.is_empty() || self.dev.is_empty() || self.dev == dev)
+    }
+}
+
+/// A route found in the kernel table that belongs to us.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Installed {
+    pub prefix: Cidr,
+    pub via: Option<String>,
+    pub dev: String,
+}
+
+/// Result of asking the OS where a destination would go.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Lookup {
+    pub dev: String,
+    pub via: Option<String>,
+    pub tunnel: bool,
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct Plan {
+    pub add: Vec<Cidr>,
+    pub remove: Vec<Installed>,
+    pub keep: usize,
+}
+
+impl Plan {
+    pub fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.remove.is_empty()
+    }
+}
+
+pub trait Net {
+    fn name(&self) -> &'static str;
+
+    /// `Err` with a human message when not running with the rights to change routes.
+    fn require_admin(&self) -> Result<(), String>;
+
+    /// Best physical gateway, or `None` when there is none right now.
+    fn uplink(&self, cfg: &Config) -> Result<Option<Uplink>, String>;
+
+    /// Names of tunnel interfaces that currently exist (informational).
+    fn tunnels(&self) -> Vec<String>;
+
+    /// Linux: make sure `from all lookup <table>` exists and is not shadowed. `probe` is a destination
+    /// that must be routed directly; if it still leaves through a tunnel because another rule is
+    /// evaluated first, our rule is moved above that rule. Returns a description of what was changed.
+    /// Other systems have no rule and always return `Ok(None)`.
+    fn ensure_rule(&self, cfg: &Config, probe: Option<u32>) -> Result<Option<String>, String>;
+
+    fn rule_present(&self, cfg: &Config) -> Result<bool, String>;
+
+    /// Routes of ours currently installed. Linux: the whole private table. Elsewhere: routes in
+    /// the shared table for `candidates` whose next hop is one of `ours`.
+    fn installed(&self, cfg: &Config, candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Result<Vec<Installed>, String>;
+
+    fn apply(&self, cfg: &Config, uplink: &Uplink, plan: &Plan) -> Result<(), String>;
+
+    /// Remove everything we installed (routes and rule). Returns the number of routes removed.
+    fn clear(&self, cfg: &Config, candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Result<usize, String>;
+
+    /// Where would traffic to `ip` leave the machine?
+    fn lookup(&self, cfg: &Config, ip: u32) -> Result<Lookup, String>;
+
+    /// Long-running command whose output lines signal network changes, if the OS has one.
+    fn watch_command(&self) -> Option<Vec<String>>;
+
+    /// True when routes live in the shared table, so ownership must be tracked in `State`.
+    fn tracks_ownership(&self) -> bool;
+}
+
+/// Diff wanted against installed. Stale routes are only pruned when `allow_prune` is set, so a
+/// missing or failed country download can never wipe the table.
+pub fn make_plan(desired: &[Cidr], installed: &[Installed], uplink: &Uplink, allow_prune: bool) -> Plan {
+    let mut by_prefix: HashMap<Cidr, Vec<&Installed>> = HashMap::new();
+    for i in installed {
+        by_prefix.entry(i.prefix).or_default().push(i);
+    }
+    let want: HashSet<Cidr> = desired.iter().copied().collect();
+    let mut plan = Plan::default();
+    for p in desired {
+        let entries = by_prefix.get(p).map(Vec::as_slice).unwrap_or(&[]);
+        if entries.iter().any(|e| uplink.matches(&e.via, &e.dev)) {
+            plan.keep += 1;
+        } else {
+            plan.add.push(*p);
+        }
+        plan.remove.extend(entries.iter().filter(|e| !uplink.matches(&e.via, &e.dev)).map(|e| (*e).clone()));
+    }
+    if allow_prune {
+        for (p, entries) in &by_prefix {
+            if !want.contains(p) {
+                plan.remove.extend(entries.iter().map(|e| (*e).clone()));
+            }
+        }
+    }
+    plan.remove.sort_by_key(|i| i.prefix);
+    plan
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn c(s: &str) -> Cidr {
+        Cidr::parse(s).unwrap()
+    }
+    fn up() -> Uplink {
+        Uplink { dev: "eth0".into(), via: Some("10.0.0.1".into()) }
+    }
+    fn inst(p: &str, via: &str, dev: &str) -> Installed {
+        Installed { prefix: c(p), via: Some(via.into()), dev: dev.into() }
+    }
+
+    #[test]
+    fn empty_table_adds_everything() {
+        let p = make_plan(&[c("5.0.0.0/8"), c("6.0.0.0/8")], &[], &up(), true);
+        assert_eq!((p.add.len(), p.remove.len(), p.keep), (2, 0, 0));
+    }
+
+    #[test]
+    fn matching_routes_are_kept_untouched() {
+        let p = make_plan(&[c("5.0.0.0/8")], &[inst("5.0.0.0/8", "10.0.0.1", "eth0")], &up(), true);
+        assert!(p.is_empty());
+        assert_eq!(p.keep, 1);
+    }
+
+    #[test]
+    fn a_changed_gateway_replaces_the_route() {
+        let old = inst("5.0.0.0/8", "10.0.0.254", "eth0");
+        let p = make_plan(&[c("5.0.0.0/8")], std::slice::from_ref(&old), &up(), true);
+        assert_eq!(p.add, [c("5.0.0.0/8")]);
+        assert_eq!(p.remove, [old]);
+    }
+
+    #[test]
+    fn a_changed_interface_replaces_the_route() {
+        let p = make_plan(&[c("5.0.0.0/8")], &[inst("5.0.0.0/8", "10.0.0.1", "wlan0")], &up(), true);
+        assert_eq!((p.add.len(), p.remove.len()), (1, 1));
+    }
+
+    #[test]
+    fn unknown_interface_matches_on_gateway_alone() {
+        let p = make_plan(&[c("5.0.0.0/8")], &[inst("5.0.0.0/8", "10.0.0.1", "")], &up(), true);
+        assert!(p.is_empty());
+    }
+
+    #[test]
+    fn stale_routes_are_pruned_only_when_allowed() {
+        let stale = inst("9.0.0.0/8", "10.0.0.1", "eth0");
+        let pruned = make_plan(&[], std::slice::from_ref(&stale), &up(), true);
+        assert_eq!(pruned.remove, std::slice::from_ref(&stale));
+        let kept = make_plan(&[], &[stale], &up(), false);
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn replacement_still_happens_when_pruning_is_off() {
+        let old = inst("5.0.0.0/8", "10.0.0.254", "eth0");
+        let p = make_plan(&[c("5.0.0.0/8")], &[old], &up(), false);
+        assert_eq!((p.add.len(), p.remove.len()), (1, 1));
+    }
+}
