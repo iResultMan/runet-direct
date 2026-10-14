@@ -198,6 +198,24 @@ Health:   <span class="ok">OK</span></pre>
   </div>
 </section>
 
+<section id="abroad" aria-labelledby="abroad-title">
+  <div class="split">
+    <div>
+      <h2 id="abroad-title" class="rise">Live outside Russia? The other way round</h2>
+      <div class="prose rise" style="--d:100ms">
+        <p>For people abroad the job is the mirror image. Gosuslugi and banks should see a Russian address, while AI services and everything else should go out directly, because they do not work from a Russian address.</p>
+        <p>You need a VPN with a Russian exit, your own or a service. Only the Russian blocks go into the tunnel, and the program prints the list for that. No service has to be installed: the list is downloaded for one command.</p>
+        <p>An automatic "Russia through the VPN" mode inside the program is planned for version 1.1.</p>
+      </div>
+    </div>
+    <dl class="cmds rise" style="--d:200ms;margin-top:0">
+      <div><dt><code>runet-direct export --format cidr</code></dt><dd>the Russian blocks, one per line</dd></div>
+      <div><dt><code>AllowedIPs = $(runet-direct export --format cidr | paste -sd, -)</code></dt><dd>the line for WireGuard: only Russia goes into the tunnel</dd></div>
+      <div><dt><code>runet-direct export --format amnezia</code></dt><dd>a list for AmneziaVPN; <code>openvpn</code> and <code>wireguard</code> formats exist too</dd></div>
+    </dl>
+  </div>
+</section>
+
 <section id="faq" aria-labelledby="faq-title">
   <h2 id="faq-title" class="rise">Questions</h2>
   <div class="faq rise" style="--d:100ms">

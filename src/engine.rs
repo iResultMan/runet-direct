@@ -199,8 +199,13 @@ pub struct Fetched {
 
 pub fn fetch_country(cfg: &Config, paths: &Paths, bind_iface: Option<&str>) -> Result<Fetched, String> {
     // One file per process: a daemon and a one-shot command can never write into the same download.
-    let tmp = paths.state_dir.join(format!("download.{}.tmp", std::process::id()));
     let _ = paths.ensure_dirs();
+    download_country(cfg, &paths.state_dir.join(format!("download.{}.tmp", std::process::id())), bind_iface)
+}
+
+/// Download and parse the country list through a scratch file at `tmp` (removed afterwards).
+pub fn download_country(cfg: &Config, tmp: &std::path::Path, bind_iface: Option<&str>) -> Result<Fetched, String> {
+    let tmp = tmp.to_path_buf();
     log::info(format!("downloading {}", cfg.ru.source_url));
     let result = fetch::download(&cfg.ru.source_url, &tmp, bind_iface).and_then(|()| {
         let file = fs::File::open(&tmp).map_err(|e| e.to_string())?;

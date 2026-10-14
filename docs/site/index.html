@@ -198,6 +198,24 @@ Health:   <span class="ok">OK</span></pre>
   </div>
 </section>
 
+<section id="abroad" aria-labelledby="abroad-title">
+  <div class="split">
+    <div>
+      <h2 id="abroad-title" class="rise">Уехали из России? Наоборот тоже можно</h2>
+      <div class="prose rise" style="--d:100ms">
+        <p>Для живущих за границей задача зеркальная. Госуслуги и банки должны видеть российский адрес, а ИИ-сервисы и всё остальное должны идти напрямую, иначе с российским адресом они не работают.</p>
+        <p>Нужен VPN с российским выходом, свой или сервис. В туннель отправляются только российские блоки, и список для этого выдаёт программа. Ставить службу не нужно: список скачивается на время одной команды.</p>
+        <p>Автоматический режим «Россия через VPN» внутри программы запланирован на версию 1.1.</p>
+      </div>
+    </div>
+    <dl class="cmds rise" style="--d:200ms;margin-top:0">
+      <div><dt><code>runet-direct export --format cidr</code></dt><dd>российские блоки, по одному в строке</dd></div>
+      <div><dt><code>AllowedIPs = $(runet-direct export --format cidr | paste -sd, -)</code></dt><dd>строка для WireGuard: в туннель пойдёт только Россия</dd></div>
+      <div><dt><code>runet-direct export --format amnezia</code></dt><dd>список для AmneziaVPN; есть и форматы <code>openvpn</code>, <code>wireguard</code></dd></div>
+    </dl>
+  </div>
+</section>
+
 <section id="faq" aria-labelledby="faq-title">
   <h2 id="faq-title" class="rise">Вопросы</h2>
   <div class="faq rise" style="--d:100ms">

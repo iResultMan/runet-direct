@@ -21,6 +21,10 @@ Anything that breaks one of these needs a new major version; additions do not.
 - A failed or truncated download never touches the routes in place.
 - Commands: `install`, `uninstall`, `start`, `stop`, `restart`, `enable`, `disable`, `status`, `check`, `apply`,
   `refresh`, `clear`, `add`, `exclude` (`--for`, `--until`, `--file`), `remove`, `list`, `pause`, `resume`, `config`,
-  `run`. `status`, `check` and `list` have `--json`; exit codes are stable.
+  `export`, `run`. `status`, `check` and `list` have `--json`; exit codes are stable.
+- Targets can be an address, a network, a site name, a pasted link (`https://site.ru/page`) or a mask (`*.site.ru`);
+  `site.ru` and `www.site.ru` always go together.
+- `export` prints the list as plain CIDR, WireGuard `AllowedIPs`, OpenVPN routes or an AmneziaVPN site list, for VPN
+  software that does the splitting itself; it works on a machine without the service.
 - Installers: `.exe` (Windows), `.pkg` (macOS, universal), `.deb` and `.rpm` (Linux, x86_64 and ARM), plus
   `install.sh` / `install.ps1`. Release files have SHA-256 checksums and build-provenance attestations.

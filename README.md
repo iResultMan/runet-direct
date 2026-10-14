@@ -96,6 +96,21 @@ Health:   OK
 | Windows, macOS and Linux | n/a | one system | **all three** |
 | Pause with a timer | no | no | **`pause --for 1h`** |
 
+## Living outside Russia? The other way round
+
+The mirror problem: Russian services (Gosuslugi, banks, the tax office) should see a Russian address, but everything else
+(AI services, streaming) should leave directly, not through a Russian address. Put *only* the Russian blocks into the tunnel:
+
+1. Use a VPN with a Russian exit (your own server or a service).
+2. `runet-direct export --format cidr` prints the Russian blocks. Nothing needs installing: with no service on the machine
+   it downloads the list for that one command.
+3. Make them the routes of that VPN. WireGuard: `AllowedIPs = ` followed by the output of
+   `runet-direct export --format cidr | paste -sd, -`. OpenVPN: `runet-direct export --format openvpn | sed s/net_gateway/vpn_gateway/`
+   with `route-nopull`. Amnezia: `--format amnezia` in the mode where the listed addresses go through the VPN.
+
+An automatic "Russia through the VPN" mode inside the service, with the same self-repair, is planned for 1.1: see
+[ROADMAP.md](ROADMAP.md).
+
 ## Everyday commands
 
 Everything except `status`, `check`, `list` and `config` needs root / Administrator.

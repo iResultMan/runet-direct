@@ -38,6 +38,10 @@ cargo clippy --all-targets --target aarch64-apple-darwin -- -D warnings
 - Keep `README.md` and `README.ru.md` in step, and put reasons for non-obvious behaviour in `docs/design.md`.
 - Commit messages in English, imperative mood, with the reason in the body.
 
+## Where the project is going
+
+See [ROADMAP.md](ROADMAP.md) before proposing something large; it also lists what was decided against.
+
 ## Reporting a problem
 
 Open an issue and attach the output of `runet-direct status --json` and the VPN you use. For a routing problem the output

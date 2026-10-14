@@ -651,14 +651,23 @@ fn export_list(paths: &Paths, format: export::Format, ipv4_only: bool, output: O
     let cfg = load_config(paths);
     let state = State::load(paths);
     let desired = engine::load_desired(paths, &cfg, &state, log::now());
-    if desired.v4.is_empty() {
-        die("there is no address list yet: install the service (it downloads the list) or run `runet-direct refresh`");
-    }
-    let text = export::render(format, &desired.v4, &desired.v6, !ipv4_only);
+    let (v4, v6) = if desired.v4.is_empty() {
+        // No service on this machine (a person who wants Russia INSIDE the tunnel does not install it): fetch the
+        // list for this export only. Nothing is installed or stored.
+        let scratch = std::env::temp_dir().join(format!("runet-direct-export-{}.tmp", std::process::id()));
+        eprintln!("no saved list on this machine; downloading it for this export only (nothing is installed)...");
+        match engine::download_country(&cfg, &scratch, None) {
+            Ok(f) => (f.v4, f.v6),
+            Err(e) => die(format!("cannot get the address list: {e}")),
+        }
+    } else {
+        (desired.v4, desired.v6)
+    };
+    let text = export::render(format, &v4, &v6, !ipv4_only);
     match output {
         Some(p) => {
             std::fs::write(&p, &text).unwrap_or_else(|e| die(format!("{}: {e}", p.display())));
-            eprintln!("wrote {} ({} IPv4 and {} IPv6 networks of the list)", p.display(), desired.v4.len(), desired.v6.len());
+            eprintln!("wrote {} ({} IPv4 and {} IPv6 networks of the list)", p.display(), v4.len(), v6.len());
         }
         None => {
             use std::io::Write;
