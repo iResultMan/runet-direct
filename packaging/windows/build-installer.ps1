@@ -7,7 +7,10 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$iscc = @("$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+# Note ${env:ProgramFiles(x86)}: without the braces PowerShell reads "$env:ProgramFiles" followed by the text "(x86)".
+$candidates = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe")
+$iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $iscc) { $cmd = Get-Command ISCC.exe -ErrorAction SilentlyContinue; if ($cmd) { $iscc = $cmd.Source } }
 if (-not $iscc) { throw "Inno Setup 6 not found (choco install innosetup -y)" }
 $exeFull = (Resolve-Path $Exe).Path
 & $iscc "/DAppVersion=$Version" "/DSourceExe=$exeFull" "/O$here" "$here\runet-direct.iss"
