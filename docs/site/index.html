@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>runet-direct — рунет мимо VPN</title>
+<meta name="description" content="Банки, Госуслуги, маркетплейсы и почта открываются напрямую, остальное идёт через VPN. Работает с любым VPN. Windows, macOS, Linux. Бесплатно, открытый код.">
+<link rel="canonical" href="https://iresultman.github.io/runet-direct/">
+<link rel="alternate" hreflang="ru" href="https://iresultman.github.io/runet-direct/">
+<link rel="alternate" hreflang="en" href="https://iresultman.github.io/runet-direct/en/">
+<link rel="alternate" hreflang="x-default" href="https://iresultman.github.io/runet-direct/en/">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#100f0d">
+<meta property="og:type" content="website">
+<meta property="og:title" content="runet-direct — рунет мимо VPN">
+<meta property="og:description" content="Российские сайты открываются напрямую, остальное идёт через ваш VPN. Бесплатно, для Windows, macOS и Linux.">
+<meta property="og:url" content="https://iresultman.github.io/runet-direct/">
+<meta property="og:image" content="https://iresultman.github.io/runet-direct/og.png">
+<meta property="og:locale" content="ru_RU">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="fonts/onest-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/onest-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+<script>document.documentElement.classList.add('js')</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"runet-direct","applicationCategory":"NetworkApplication","operatingSystem":"Windows, macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"license":"https://opensource.org/license/mit","url":"https://iresultman.github.io/runet-direct/","codeRepository":"https://github.com/iResultMan/runet-direct","inLanguage":"ru"}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">К содержанию</a>
+<main id="main">
+
+<section class="hero" aria-labelledby="top-title">
+  <div class="bar">
+    <a class="brand" href="./" aria-label="runet-direct, на главную">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M6 22h52" stroke="#ff5b1f" stroke-width="5" fill="none"/><path d="M6 42h14M44 42h14" stroke="#ede9e0" stroke-opacity=".6" stroke-width="5" fill="none"/><rect x="22" y="33" width="20" height="18" stroke="#ede9e0" stroke-opacity=".6" stroke-width="3" fill="none"/></svg>
+      runet-direct
+    </a>
+    <nav class="nav" aria-label="Разделы">
+      <a href="#how">Как это работает</a>
+      <a href="#install">Установка</a>
+      <a href="#faq">Вопросы</a>
+      <a href="https://github.com/iResultMan/runet-direct">GitHub</a>
+      <a href="en/" hreflang="en" lang="en">English</a>
+    </nav>
+  </div>
+
+  <div class="lanes rise" style="--d:300ms" role="img" aria-label="Схема: с вашего компьютера трафик идёт двумя путями. Российские сайты напрямую, остальной интернет через туннель VPN.">
+    <div class="lane lane--direct">
+      <span class="lane__from">Ваш компьютер</span>
+      <span class="lane__line draw"></span>
+      <span class="lane__to">Банки, Госуслуги, почта</span>
+    </div>
+    <div class="lane lane--vpn">
+      <span class="lane__from"></span>
+      <span class="lane__line draw"><span class="tunnel">VPN</span></span>
+      <span class="lane__to">Остальной мир</span>
+    </div>
+  </div>
+
+  <div class="hero__copy">
+    <h1 id="top-title" class="rise" style="--d:420ms">runet-direct<br>рунет мимо VPN</h1>
+    <p class="lead rise" style="--d:900ms">Банки, Госуслуги и почта открываются напрямую. Всё остальное идёт через ваш VPN, какой бы он ни был.</p>
+    <div class="cta rise" style="--d:1040ms">
+      <a id="cta" class="btn btn--fill" href="#install"
+         data-label-windows="Скачать для Windows" data-href-windows="https://github.com/iResultMan/runet-direct/releases/latest/download/runet-direct-setup-x86_64.exe"
+         data-label-mac="Скачать для macOS" data-href-mac="https://github.com/iResultMan/runet-direct/releases/latest/download/runet-direct-macos.pkg"
+         data-label-linux="Скачать для Linux" data-href-linux="https://github.com/iResultMan/runet-direct/releases/latest/download/runet-direct-linux-amd64.deb">
+        <span>Скачать установщик</span>
+        <svg class="arrow" viewBox="0 0 18 16" aria-hidden="true"><path d="M0 8h16M10 2l6 6-6 6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+      </a>
+      <a class="btn" href="https://github.com/iResultMan/runet-direct">
+        <span>Код на GitHub</span>
+        <svg class="arrow" viewBox="0 0 18 16" aria-hidden="true"><path d="M0 8h16M10 2l6 6-6 6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+      </a>
+      <span class="note">Бесплатно, открытый код, 1,4 МБ</span>
+    </div>
+  </div>
+</section>
+
+<section id="how" aria-labelledby="how-title">
+  <div class="split">
+    <div>
+      <h2 id="how-title" class="rise">Проверка — одна команда</h2>
+      <div class="prose rise" style="--d:100ms">
+        <p>Откройте терминал и введите <code>runet-direct status</code>. Если в последней строке написано <strong>Health: OK</strong>, российские адреса идут напрямую, а остальные там, где вы их оставили.</p>
+        <p>Служба запускается вместе с компьютером, сама скачивает список российских адресов (его публикует европейский регистратор RIPE NCC) и обновляет его раз в месяц. Если что-то сбросило маршруты, например раздача интернета с телефона или смена сети, она вернёт их сама.</p>
+      </div>
+    </div>
+    <div class="rise" style="--d:200ms">
+<pre tabindex="0" aria-label="Пример вывода команды runet-direct status"><b>$ runet-direct status</b>
+Service:  running (systemd), starts at boot
+Tunnels:  tun0 (left alone)
+IPv4 uplink: 192.168.1.1 via enp3s0f0
+IPv4 routes: 8740 of 8740 in place
+IPv6 uplink: none (no IPv6 here)
+Country:  8662 IPv4 + 2168 IPv6 blocks
+  probe             2.56.24.1 -> enp3s0f0
+  probe          193.106.191.1 -> enp3s0f0
+Health:   <span class="ok">OK</span></pre>
+      <ul class="figures">
+        <li><strong>8 740</strong><span>маршрутов в таблице на проверенной машине. Список блоков склеивается, поэтому их меньше, чем исходных записей.</span></li>
+        <li><strong>2 с</strong><span>уходит на то, чтобы вернуть правило, которое снесла смена сети. Проверено на живой системе.</span></li>
+        <li><strong>1,4 МБ</strong><span>вся программа одним файлом. Python, Node и прочее ставить не нужно.</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="vpn" aria-labelledby="vpn-title">
+  <div class="split">
+    <div>
+      <h2 id="vpn-title" class="rise">Какой у вас VPN, неважно</h2>
+      <div class="prose rise" style="--d:100ms">
+        <p>Программа не пытается узнать, что за VPN стоит, и не зависит от его названия. Она проверяет результат: куда на самом деле уйдёт российский адрес.</p>
+        <p>Если VPN вставил своё правило раньше нашего и перехватил трафик, служба ставит своё правило выше и записывает это в журнал. Если исправить нельзя, она не молчит, а сообщает об утечке.</p>
+      </div>
+    </div>
+    <div class="rise" style="--d:200ms">
+      <p class="label">Что проверено тестами на Linux</p>
+      <dl class="facts">
+        <div><dt>VPN как маршрут по умолчанию</dt><dd>Российские адреса уходят проводом, остальные в туннель.</dd></div>
+        <div><dt>VPN с половинками 0/1 и 128/1</dt><dd>То же самое. Эти маршруты уже менее точные, чем наши.</dd></div>
+        <div><dt>VPN встал в таблице правил раньше</dt><dd>Правило поднимается над ним: с 2500 на 999, затем на 499, когда VPN опустился ниже.</dd></div>
+        <div><dt>Смена шлюза и потеря правила</dt><dd>Маршруты перенаправляются на новый шлюз, правило возвращается за две секунды.</dd></div>
+      </dl>
+      <p class="note" style="margin-top:1rem">На macOS и Windows правил в таблице нет: побеждает самый точный маршрут. Установку и запуск там проверяет автоматическая сборка на настоящих системах.</p>
+    </div>
+  </div>
+</section>
+
+<section id="install" aria-labelledby="install-title">
+  <h2 id="install-title" class="rise">Установка</h2>
+  <div class="os">
+    <div class="os__row rise" data-os="windows" style="--d:50ms">
+      <h3>Windows 10 и 11</h3>
+      <div>
+        <p>Скачайте файл, запустите и нажмите «Установить». Понадобится пароль администратора.</p>
+        <p class="small">Windows может написать «Неизвестный издатель»: у бесплатного проекта нет платной подписи. Нажмите «Подробнее», затем «Выполнить в любом случае».</p>
+      </div>
+      <a class="btn" href="https://github.com/iResultMan/runet-direct/releases/latest/download/runet-direct-setup-x86_64.exe"><span>runet-direct-setup.exe</span><svg class="arrow" viewBox="0 0 18 16" aria-hidden="true"><path d="M0 8h16M10 2l6 6-6 6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg></a>
+    </div>
+    <div class="os__row rise" data-os="mac" style="--d:100ms">
+      <h3>macOS 11 и новее</h3>
+      <div>
+        <p>Один файл для Intel и Apple Silicon. Откройте его, нажмите «Продолжить», затем «Установить» и введите пароль Mac.</p>
+        <p class="small">Если macOS скажет, что не может проверить разработчика, откройте файл правой кнопкой мыши, выберите «Открыть» и подтвердите.</p>
+      </div>
+      <a class="btn" href="https://github.com/iResultMan/runet-direct/releases/latest/download/runet-direct-macos.pkg"><span>runet-direct.pkg</span><svg class="arrow" viewBox="0 0 18 16" aria-hidden="true"><path d="M0 8h16M10 2l6 6-6 6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg></a>
+    </div>
+    <div class="os__row rise" data-os="linux" style="--d:150ms">
+      <h3>Linux</h3>
+      <div>
+        <p>Ubuntu, Debian, Mint: дважды щёлкните скачанный <code>.deb</code>. Fedora и другие: <code>.rpm</code>. Нужен systemd. Версии для ARM лежат на странице релизов.</p>
+        <p class="small">Или одной строкой для любого дистрибутива:</p>
+<pre tabindex="0">curl -fsSL https://raw.githubusercontent.com/iResultMan/runet-direct/main/install.sh | sudo sh</pre>
+      </div>
+      <a class="btn" href="https://github.com/iResultMan/runet-direct/releases/latest/download/runet-direct-linux-amd64.deb"><span>runet-direct.deb</span><svg class="arrow" viewBox="0 0 18 16" aria-hidden="true"><path d="M0 8h16M10 2l6 6-6 6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg></a>
+    </div>
+  </div>
+  <p class="prose rise" style="margin-top:1.75rem">Настраивать ничего не нужно. Через минуту после установки выполните <code>runet-direct status</code>. Все файлы лежат на <a href="https://github.com/iResultMan/runet-direct/releases/latest">странице релизов</a> с контрольными суммами.</p>
+</section>
+
+<section id="control" aria-labelledby="control-title">
+  <div class="split">
+    <div>
+      <h2 id="control-title" class="rise">Управление</h2>
+      <div class="prose rise" style="--d:100ms">
+        <p>Всё, что делает служба, доступно командами. У них есть вывод <code>--json</code> и постоянные коды выхода, поэтому другие программы управляют службой так же, как вы.</p>
+      </div>
+    </div>
+    <dl class="cmds rise" style="--d:200ms;margin-top:0">
+      <div><dt><code>runet-direct status</code></dt><dd>состояние службы и маршрутов</dd></div>
+      <div><dt><code>runet-direct check bank.ru</code></dt><dd>куда пойдёт этот адрес: напрямую или в VPN</dd></div>
+      <div><dt><code>runet-direct pause --for 1h</code></dt><dd>весь трафик через VPN на час, например чтобы увидеть сайт глазами иностранца</dd></div>
+      <div><dt><code>runet-direct exclude example.com --for 30m</code></dt><dd>этот сайт через VPN, потом вернётся сам</dd></div>
+      <div><dt><code>runet-direct add 203.0.113.0/24</code></dt><dd>эту сеть всегда напрямую; можно передать файл со списком</dd></div>
+      <div><dt><code>runet-direct config set ipv6.enabled false</code></dt><dd>IPv6 не трогать, IPv4 продолжит работать</dd></div>
+    </dl>
+  </div>
+</section>
+
+<section id="faq" aria-labelledby="faq-title">
+  <h2 id="faq-title" class="rise">Вопросы</h2>
+  <div class="faq rise" style="--d:100ms">
+    <details><summary>Безопасно ли это?</summary><div>
+      <p>Программа не читает и не перехватывает трафик. Она только добавляет маршруты в таблицу системы и убирает их, когда вы её удаляете. Код открыт и лежит под лицензией MIT. У файлов релиза есть контрольные суммы и подтверждение происхождения сборки.</p></div></details>
+    <details><summary>Куда программа ходит в сеть?</summary><div>
+      <p>Раз в месяц скачивает файл со списком адресов с сервера RIPE NCC. Больше никуда. Телеметрии нет, учётной записи нет.</p></div></details>
+    <details><summary>Что будет, если VPN отключится?</summary><div>
+      <p>Российские адреса продолжат идти напрямую, остальные поведут себя так, как настроено у вас в системе. Службе VPN не нужен.</p></div></details>
+    <details><summary>Один сайт всё равно открывается через VPN. Почему?</summary><div>
+      <p>Список строится по российским адресам. Сайт, который стоит за зарубежной сетью доставки, в него не попадёт. Добавьте его вручную: <code>runet-direct add имя-сайта.ru</code>. Проверить результат можно командой <code>runet-direct check имя-сайта.ru</code>.</p></div></details>
+    <details><summary>Работает ли это с IPv6?</summary><div>
+      <p>Да. IPv4 и IPv6 включаются раздельно. Если у вас нет IPv6, служба его просто пропускает.</p></div></details>
+    <details><summary>Как удалить?</summary><div>
+      <p>Windows: «Параметры», «Приложения», runet-direct. macOS: <code>sudo runet-direct uninstall</code>. Linux: <code>sudo apt remove runet-direct</code> или <code>sudo dnf remove runet-direct</code>. Маршруты снимаются при удалении.</p></div></details>
+    <details><summary>Не блокирует ли это «аварийный выключатель» моего VPN?</summary><div>
+      <p>Если выключатель устроен как правило файрвола, он блокирует и прямой трафик, и программа ничего с этим сделать не может. Отключите выключатель или добавьте исключение для вашего подключения.</p></div></details>
+  </div>
+</section>
+
+</main>
+<footer>
+  <span>runet-direct, лицензия MIT. Список адресов: RIPE NCC.</span>
+  <span><a href="https://github.com/iResultMan/runet-direct">Исходный код</a> · <a href="https://github.com/iResultMan/runet-direct/issues">Сообщить о проблеме</a> · <a href="en/" hreflang="en" lang="en">English</a></span>
+</footer>
+<script src="main.js" defer></script>
+</body>
+</html>

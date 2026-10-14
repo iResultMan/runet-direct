@@ -1,0 +1,9 @@
+#!/bin/sh
+# On removal take the service and its routes away; on upgrade leave them (the new postinst restarts the service).
+set -e
+case "$1" in
+  remove|deconfigure)
+    [ -x /usr/bin/runet-direct ] && /usr/bin/runet-direct uninstall --in-place || true
+    ;;
+esac
+exit 0

@@ -1,0 +1,13 @@
+#!/bin/sh
+# Register and start the service. A failure here (no systemd, no network) must not break the package install.
+set -e
+case "$1" in
+  configure)
+    if [ -d /run/systemd/system ]; then
+      /usr/bin/runet-direct install --in-place --no-wait || echo "runet-direct: service setup failed; run 'sudo runet-direct install --in-place' later" >&2
+    else
+      echo "runet-direct: systemd is not running; start the daemon with 'runet-direct run' from your init system" >&2
+    fi
+    ;;
+esac
+exit 0

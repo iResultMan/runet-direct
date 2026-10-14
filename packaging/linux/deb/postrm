@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+case "$1" in
+  purge)
+    rm -rf /etc/runet-direct /var/lib/runet-direct
+    ;;
+esac
+exit 0

@@ -1,0 +1,10 @@
+name: An idea
+description: Suggest a change. Keep in mind that the project does one job.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What are you trying to do?
+      description: Describe the situation first, then the change you have in mind.
+    validations: { required: true }

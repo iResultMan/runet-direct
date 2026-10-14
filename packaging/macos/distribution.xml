@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <title>runet-direct</title>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <license file="license.txt" mime-type="text/plain"/>
+    <options customize="never" require-scripts="false" hostArchitectures="x86_64,arm64"/>
+    <domains enable_anyUser="false" enable_localSystem="true"/>
+    <choices-outline>
+        <line choice="default">
+            <line choice="io.github.iresultman.runet-direct"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="io.github.iresultman.runet-direct" visible="false">
+        <pkg-ref id="io.github.iresultman.runet-direct"/>
+    </choice>
+    <pkg-ref id="io.github.iresultman.runet-direct" version="@VERSION@" onConclusion="none">component.pkg</pkg-ref>
+</installer-gui-script>

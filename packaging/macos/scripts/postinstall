@@ -1,0 +1,9 @@
+#!/bin/sh
+# Runs as root after the files are in place: register the launchd service and start it.
+# A failure must not make the installer report an error; the log says what happened.
+LOG=/var/log/runet-direct-install.log
+{
+  echo "== $(date) runet-direct postinstall"
+  /usr/local/bin/runet-direct install --in-place
+} >> "$LOG" 2>&1 || echo "runet-direct: service setup failed, see $LOG" >&2
+exit 0

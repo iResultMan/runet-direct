@@ -23,7 +23,7 @@ jobs:
       - run: cargo test
 
   linux-e2e:
-    name: Linux end-to-end (network namespace + systemd service)
+    name: Linux end-to-end (network namespace, systemd service, .deb)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +35,15 @@ jobs:
         run: sudo -E tests/linux-service.sh target/debug/runet-direct
         env:
           RUNET_TEST_DISPOSABLE: "1"
+      - name: The .deb installs, runs and removes cleanly
+        run: |
+          packaging/linux/build-deb.sh target/debug/runet-direct amd64 0.0.0-ci /tmp/runet-direct.deb
+          sudo apt-get install -y /tmp/runet-direct.deb
+          systemctl is-active runet-direct
+          for i in $(seq 1 60); do runet-direct status >/dev/null 2>&1 && break; sleep 2; done
+          runet-direct status
+          sudo apt-get purge -y runet-direct
+          test ! -e /usr/bin/runet-direct && test ! -e /etc/systemd/system/runet-direct.service && test ! -e /etc/runet-direct
 
   # Real-machine smoke tests for the systems that cannot be exercised in a namespace.
   # Hosted runners are disposable and run as administrator/root.
@@ -49,7 +58,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build
-      - name: macOS
+      - name: macOS (binary install, then the .pkg)
         if: runner.os == 'macOS'
         run: |
           sudo ./target/debug/runet-direct install
@@ -58,13 +67,24 @@ jobs:
           sudo /usr/local/bin/runet-direct stop
           sudo /usr/local/bin/runet-direct start
           sudo /usr/local/bin/runet-direct uninstall --purge
-      - name: Windows
+          packaging/macos/build-pkg.sh target/debug/runet-direct 0.0.0 /tmp/runet-direct.pkg
+          sudo installer -pkg /tmp/runet-direct.pkg -target /
+          for i in $(seq 1 60); do /usr/local/bin/runet-direct status >/dev/null 2>&1 && break; sleep 2; done
+          /usr/local/bin/runet-direct status
+          sudo /usr/local/bin/runet-direct uninstall --purge
+      - name: Windows (binary install, then the setup.exe)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $exe = "$env:ProgramFiles\runet-direct\runet-direct.exe"
           .\target\debug\runet-direct.exe install
-          & "$env:ProgramFiles\runet-direct\runet-direct.exe" status
-          & "$env:ProgramFiles\runet-direct\runet-direct.exe" check 213.59.1.1
-          & "$env:ProgramFiles\runet-direct\runet-direct.exe" stop
-          & "$env:ProgramFiles\runet-direct\runet-direct.exe" start
-          & "$env:ProgramFiles\runet-direct\runet-direct.exe" uninstall --purge
+          & $exe status
+          & $exe check 213.59.1.1
+          & $exe stop
+          & $exe start
+          & $exe uninstall --purge
+          choco install innosetup -y --no-progress
+          .\packaging\windows\build-installer.ps1 -Exe target\debug\runet-direct.exe -Version 0.0.0 -Out dist\setup.exe
+          Start-Process -Wait -FilePath dist\setup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART'
+          & $exe status
+          & "$env:ProgramFiles\runet-direct\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART

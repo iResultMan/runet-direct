@@ -1,94 +1,120 @@
-# runet-direct
+<p align="center">
+  <img src="docs/site/favicon.svg" width="72" alt="">
+</p>
 
-**Keep Russian-internet traffic off your VPN. Install once, forget it.**
+<h1 align="center">runet-direct</h1>
 
-[Русская версия](README.ru.md)
+<p align="center">
+  <b>Russian sites go straight out. Everything else goes through your VPN.<br>Install once, forget it.</b>
+</p>
 
-When a VPN is on, *everything* goes through it, including Russian banks, government portals, marketplaces and
-mail, many of which refuse foreign addresses or are simply slower that way. `runet-direct` is a small background
-service that sends traffic for Russian address blocks straight out through your normal connection while everything
-else keeps using the VPN. It works with any VPN, because it never looks at which one you use.
+<p align="center">
+  <a href="https://github.com/iResultMan/runet-direct/actions/workflows/ci.yml"><img src="https://github.com/iResultMan/runet-direct/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/iResultMan/runet-direct/releases/latest"><img src="https://img.shields.io/github/v/release/iResultMan/runet-direct?color=ff5b1f" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-supported-lightgrey" alt="Windows, macOS, Linux">
+</p>
 
-- One static binary, no runtime. Linux, macOS and Windows. IPv4 and IPv6, each switchable on its own.
-- Installs itself as a native background service and repairs its own routes when the network changes.
-- Controlled from the command line, with JSON output and stable exit codes, so other programs can drive it.
+<p align="center">
+  <a href="https://iresultman.github.io/runet-direct/en/">Website</a> ·
+  <a href="https://github.com/iResultMan/runet-direct/releases/latest">Download</a> ·
+  <a href="README.ru.md">Русская версия</a>
+</p>
+
+---
+
+## The problem
+
+A VPN sends *everything* through its tunnel, including Russian banks, Gosuslugi, marketplaces and mail. Many of them
+refuse foreign addresses, ask for extra verification, or just load slowly. Turning the VPN off for them means turning
+it off for everything. Per-app split tunneling does not help when one browser opens both worlds.
+
+## What runet-direct does
+
+```
+                    ┌── Russian address ─────────────────────────► banks, Gosuslugi, mail   (direct)
+ your computer ─────┤
+                    └── anything else ───► [ VPN tunnel ] ───────► the rest of the world
+```
+
+It is a small background service. It knows which address blocks belong to Russia (from the public RIPE NCC
+registry), sends exactly those out through your normal connection, and leaves everything else to your VPN. It does not
+care which VPN you use, because it never looks at it. It checks the *result*: where a Russian address would really go.
+
+- **Works with any VPN.** Linux, macOS and Windows. IPv4 and IPv6, each switchable on its own.
+- **Repairs itself.** Tethering from a phone, a new network, a VPN that reshuffles its rules: the routes come back
+  within seconds. A VPN that puts its rule *in front* of ours is detected, and ours moves above it.
+- **One small file.** 1.4 MB, no runtime, no dependencies to install. No telemetry, no account.
+- **Scriptable.** Every command has `--json` and stable exit codes, so other programs can drive it.
 
 ## Install
 
-**Linux / macOS** (needs `curl`; Linux also needs `ip` from iproute2 and systemd for the service):
+| System | Do this |
+| --- | --- |
+| **Windows 10/11** | Download [`runet-direct-setup-x86_64.exe`](https://github.com/iResultMan/runet-direct/releases/latest/download/runet-direct-setup-x86_64.exe), run it, click *Install*. |
+| **macOS 11+** | Download [`runet-direct-macos.pkg`](https://github.com/iResultMan/runet-direct/releases/latest/download/runet-direct-macos.pkg) (Intel and Apple Silicon), open it, click *Continue* and *Install*. |
+| **Ubuntu / Debian / Mint** | Download [`runet-direct-linux-amd64.deb`](https://github.com/iResultMan/runet-direct/releases/latest/download/runet-direct-linux-amd64.deb) and double-click it (or `sudo apt install ./file.deb`). |
+| **Fedora and other RPM systems** | [`runet-direct-linux-x86_64.rpm`](https://github.com/iResultMan/runet-direct/releases/latest/download/runet-direct-linux-x86_64.rpm): `sudo dnf install ./file.rpm`. |
+| **Any Linux or macOS, one line** | `curl -fsSL https://raw.githubusercontent.com/iResultMan/runet-direct/main/install.sh \| sudo sh` |
+| **Windows, one line** (elevated PowerShell) | `irm https://raw.githubusercontent.com/iResultMan/runet-direct/main/install.ps1 \| iex` |
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/iResultMan/runet-direct/main/install.sh | sudo sh
-```
+ARM builds (`arm64`, `aarch64`) are on the [releases page](https://github.com/iResultMan/runet-direct/releases/latest).
+Nothing needs configuring. The first start downloads the address list (about 18 MB) once.
 
-**Windows** (PowerShell opened *as Administrator*):
+> **A note on warnings.** The installers are not signed with a paid certificate (this is a free project). Windows may
+> show *Unknown publisher*: click *More info*, then *Run anyway*. macOS may say it cannot verify the developer:
+> right-click the file, choose *Open*. Every release file has a SHA-256 checksum and a build-provenance attestation
+> (`gh attestation verify <file> --repo iResultMan/runet-direct`), so you can check what you downloaded.
 
-```powershell
-irm https://raw.githubusercontent.com/iResultMan/runet-direct/main/install.ps1 | iex
-```
-
-**From source** (Rust 1.89+): `cargo build --release`, then `sudo ./target/release/runet-direct install`
-(on Windows run `runet-direct.exe install` from an elevated prompt).
-
-The installer downloads one file, verifies its SHA-256, registers the service, starts it and waits for the first
-sync (it downloads about 18 MB of public RIPE address data once). After that:
-
-```bash
-runet-direct status
-```
-
-Re-running `install` upgrades in place and keeps your settings.
-
-Release files carry a build-provenance attestation and a SHA-256 file. To verify a download independently of the
-installer: `gh attestation verify <file> --repo iResultMan/runet-direct`.
-
-## What you will see
+A minute later:
 
 ```
+$ runet-direct status
 Service:  running (systemd), starts at boot
 Tunnels:  tun0 (left alone)
 IPv4 uplink: 192.168.1.1 via enp3s0f0
-IPv4 routes: 8662 of 8662 in place
-IPv6 uplink: fe80::1 via enp3s0f0
-IPv6 routes: 1943 of 1943 in place
-Country:  8662 IPv4 + 1943 IPv6 blocks, RIPE snapshot 2026-10-13, fetched 2 days ago
+IPv4 routes: 8740 of 8740 in place
+IPv6 uplink: none (no IPv6 here)
+Country:  8662 IPv4 + 2168 IPv6 blocks, RIPE snapshot 2026-10-13, fetched 0 days ago
 Health:   OK
 ```
 
-## Commands
+`Health: OK` is all you need to see.
+
+## How it compares
+
+| | Split tunneling in your VPN app | Hand-written route scripts | **runet-direct** |
+| --- | --- | --- | --- |
+| Works with whichever VPN you have | only if the app offers it | tied to one setup | **yes** |
+| Knows the Russian address blocks | you maintain a list | you maintain it | **yes, updated monthly** |
+| Survives network changes | n/a | only if you wrote that part | **yes, within seconds** |
+| Notices when a VPN steals the traffic | n/a | no | **yes** |
+| Windows, macOS and Linux | n/a | one system | **all three** |
+| Pause with a timer | no | no | **`pause --for 1h`** |
+
+## Everyday commands
 
 Everything except `status`, `check`, `list` and `config` needs root / Administrator.
 
 | Command | What it does |
 | --- | --- |
-| `install [--no-start]` | Install the service, enable it at boot, start it. Safe to repeat (upgrade). |
-| `uninstall [--purge]` | Stop and remove the service **and every route it added**. `--purge` also deletes settings and data. |
-| `start` / `stop` / `restart` | Control the service. **`stop` leaves the routes in place** so Russian traffic never silently falls back into the VPN. |
-| `enable` / `disable` | Start at boot / do not start at boot. |
 | `status [--json]` | Service and routing state. Exit code: `0` healthy, `1` running but a problem was found, `3` installed but not running, `4` not installed. |
 | `check [--json]` | Verify the *real* routing state (asks the OS where sample destinations would go). Exit `0` ok, `1` problem. |
 | `check TARGET` | Where would this IP, CIDR or domain go? Prints `direct via <interface>` or `TUNNEL`. Exit `0` direct, `1` tunnel. |
-| `apply` | Bring the routes to the wanted state once, without the daemon. |
-| `refresh` | Download the address list now, then apply. |
-| `clear` | Remove all routes and the rule it installed. |
-| `add TARGET...` | Always go direct: an IP, `a.b.c.d/n`, or a domain name. |
-| `exclude TARGET...` | Never go direct, even if the Russian list contains it. Wins over everything. |
+| `pause [--for 1h]` / `resume` | Send **everything** through the VPN for a while, e.g. to test a site as a foreigner would see it. |
+| `add TARGET...` | Always go direct: an IP, `a.b.c.d/n`, an IPv6 prefix, or a domain. `--file FILE` (or `-` for stdin) takes a whole list. |
+| `exclude TARGET...` | Never go direct, even if the Russian list contains it. `--for 30m` / `--until <time>` makes it temporary and self-reverting. |
 | `remove TARGET...` / `list [--json]` | Edit / show the manual list. |
-| `pause [--for 1h]` / `resume` | Send **everything** through the VPN for a while (or until `resume`), e.g. to test how a service behaves from a foreign address. |
+| `config get KEY` / `config set KEY VALUE` | Read or change one setting, e.g. `config set ipv6.enabled false`. Comments in the file are kept. |
+| `install` / `uninstall [--purge]` | Install the service and enable it at boot / remove it **and every route it added**. |
+| `start` / `stop` / `restart` / `enable` / `disable` | Control the service. **`stop` leaves the routes in place** so Russian traffic never silently falls back into the VPN. |
+| `apply` / `refresh` / `clear` | One-shot sync / download the list now / remove all routes. |
 
-`add`, `exclude` and `remove` accept `--file FILE` (one target per line, `-` for standard input), so another program
-can hand over a whole table. `add` and `exclude` accept `--for 30m` / `--until 2026-10-14T18:00:00Z`: the entry
-then expires by itself, even if the program that created it has crashed, and the service wakes up at that moment.
-`status` shows an active pause.
-| `config` / `config path` | Show the effective settings / where the files live. |
-| `config get KEY` / `config set KEY VALUE` | Read or change one setting such as `ipv6.enabled`; comments in the file are kept, the change is validated and applied at once. |
-| `run [--log-file F]` | Run the daemon in the foreground (this is what the service executes). |
-
-Other programs should rely on `--json` output and exit codes, not on the human-readable text.
+`runet-direct --help` lists everything. Other programs should rely on `--json` and the exit codes, not on the text.
 
 ## Settings
 
-Files are created on install with every option commented. Edit, then `runet-direct restart`.
+Created on install with every option commented. Edit, then `runet-direct restart` (or use `config set`).
 
 | | Linux | macOS | Windows |
 | --- | --- | --- | --- |
@@ -104,51 +130,46 @@ direct bank.example.com   # domains are re-resolved every few hours
 vpn    198.51.100.7       # never direct, even though a Russian block contains it
 ```
 
-`config.toml` options: `[ipv4]` / `[ipv6]` `enabled`; `[routing]` `table`, `priority`, `interface`,
-`ignore_interfaces`; `[ru]` `enabled`, `country`, `source_url`, `refresh_days`, `min_prefixes`; `[daemon]`
-`interval_seconds`.
+`config.toml`: `[ipv4]` / `[ipv6]` `enabled`; `[routing]` `table`, `priority`, `interface`, `ignore_interfaces`; `[ru]`
+`enabled`, `country`, `source_url`, `refresh_days`, `min_prefixes`; `[daemon]` `interval_seconds`. A disabled address
+family is left completely alone (routes added for it earlier are removed once).
 
-**IPv4 and IPv6 are independent.** `runet-direct config set ipv6.enabled false` leaves IPv6 completely alone (and
-removes any IPv6 routes this program added earlier); the same switch exists for `ipv4`. A machine that has no
-IPv6 connection at all simply has nothing to do for it and stays healthy.
+## Honest limits
 
-## Does it really work with my VPN?
+- A VPN **kill switch** built as a firewall rule blocks direct traffic by design, so it defeats this tool.
+- The very first download needs a working internet connection. Afterwards the service runs from its saved copy and
+  refreshes it monthly; a failed or truncated download never touches the routes in place.
+- The list is built from Russian address blocks. A site hosted behind a foreign delivery network is not in it; add it
+  with `runet-direct add site.ru`.
+- Linux is covered by end-to-end tests (network namespace, a real systemd service, the `.deb` in a container).
+  macOS and Windows share the engine and are installed and checked by CI on real machines, but have seen less
+  real-world use. Reports are welcome.
+- `curl` must be on the path (it ships with Windows 10+, macOS and almost every Linux).
 
-It does not need to know your VPN. How, in plain words:
+## How it works, in short
 
-- **Linux** keeps its routes in a private table and adds one rule, "look in my table first". A VPN can put a rule of
-  its own in front of that. So the service does not trust the rule's presence; it asks the system where a Russian
-  address would really go. If the answer is "into the VPN", it moves its rule above whatever intercepts it, and logs
-  it. This is checked on every network event.
-- **macOS and Windows** have no rules: the most specific route always wins, and the Russian blocks are far more
-  specific than the VPN's catch-all routes, so they win by themselves.
-- The physical connection is picked by what the interface is (real hardware vs. virtual), never by a VPN name.
+- **Linux:** a private routing table plus one rule, "look in my table first", with a smaller priority number than any
+  VPN rule. After the routes are in, the service asks the kernel where a Russian address really goes; if a VPN rule
+  captures it, ours is moved just above that rule.
+- **macOS and Windows:** plain routes to the physical gateway; the most specific route wins, and Russian blocks are far
+  more specific than a VPN's catch-all routes.
+- The physical connection is chosen by what an interface *is* (hardware vs. virtual), never by a VPN name.
 
-Caveat: a VPN "kill switch" implemented as a firewall blocks direct traffic by design, so it defeats this tool.
+The reasons behind every odd-looking rule are in [docs/design.md](docs/design.md).
 
-## Requirements and limits
-
-- `curl` on the path (present on current Windows 10+, macOS and almost every Linux).
-- The first download needs a working internet connection. Afterwards the service runs from its saved copy of the
-  list and refreshes it monthly; a failed or truncated download never touches the routes in place.
-- Windows runs the service as a scheduled task started at boot as SYSTEM (restarted if it exits with an error);
-  macOS uses launchd; Linux uses systemd. Other init systems: run `runet-direct run` yourself.
-- Linux is covered by end-to-end tests (network namespace, real systemd service). macOS and Windows share the
-  engine and are smoke-tested in CI on real runners, but have seen less real-world use.
-
-## Development
+## Build and test
 
 ```bash
-cargo test                                          # unit tests, any OS
-cargo build && sudo tests/linux-netns.sh target/debug/runet-direct   # routing e2e in a throw-away namespace
+cargo build --release                                   # one static binary
+cargo test                                              # unit tests, any OS
+sudo tests/linux-netns.sh target/debug/runet-direct     # routing end-to-end in a throw-away network namespace
 ```
 
-`tests/linux-service.sh` installs the real service and is meant for disposable machines only
-(`RUNET_TEST_DISPOSABLE=1`). Design notes and the reasons behind the odd-looking rules are in
-[docs/design.md](docs/design.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). `tests/linux-service.sh` and `tests/macos-live.sh` install real services and are
+meant for disposable machines.
 
 ## Data source and license
 
 Address blocks come from the RIPE NCC delegation statistics
 (`ftp.ripe.net/pub/stats/ripencc/delegated-ripencc-extended-latest`), used under RIPE's terms for raw data.
-Code: [MIT](LICENSE).
+Code: [MIT](LICENSE). The website uses the Onest typeface under the SIL Open Font License.

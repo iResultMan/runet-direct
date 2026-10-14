@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.1.0 to publish binaries for every supported system.
+# Push a tag like v0.1.0 to publish binaries and installers for every supported system.
 on:
   push:
     tags: ["v*"]
@@ -11,7 +11,18 @@ permissions:
   attestations: write
 
 jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches Cargo.toml
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          cargo_version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          [ "$tag" = "$cargo_version" ] || { echo "tag v$tag != Cargo.toml $cargo_version"; exit 1; }
+
   build:
+    needs: check-version
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -50,27 +61,115 @@ jobs:
           Compress-Archive -Path "target/${{ matrix.target }}/release/runet-direct.exe" -DestinationPath $asset
           $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
           "$hash  $asset" | Out-File -Encoding ascii "$asset.sha256"
-      - uses: actions/upload-artifact@v4
+      - name: Archives for the install scripts
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
+          name: archive-${{ matrix.target }}
           path: |
             runet-direct-${{ matrix.target }}.*
+      - name: Raw binary for the installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/runet-direct
+            target/${{ matrix.target }}/release/runet-direct.exe
+          if-no-files-found: ignore
+
+  package-linux:
+    needs: build
+    name: .deb and .rpm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: raw-*-linux-musl
+          path: raw
+      - run: sudo apt-get update && sudo apt-get install -y rpm
+      - name: Build packages
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          mkdir dist
+          packaging/linux/build-deb.sh raw/raw-x86_64-unknown-linux-musl/runet-direct  amd64   "$v" dist/runet-direct-linux-amd64.deb
+          packaging/linux/build-deb.sh raw/raw-aarch64-unknown-linux-musl/runet-direct arm64   "$v" dist/runet-direct-linux-arm64.deb
+          packaging/linux/build-rpm.sh raw/raw-x86_64-unknown-linux-musl/runet-direct  x86_64  "$v" dist/runet-direct-linux-x86_64.rpm
+          packaging/linux/build-rpm.sh raw/raw-aarch64-unknown-linux-musl/runet-direct aarch64 "$v" dist/runet-direct-linux-aarch64.rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-linux
+          path: dist/*
+
+  package-macos:
+    needs: build
+    name: macOS .pkg
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: raw-*-apple-darwin
+          path: raw
+      - name: One package for Intel and Apple Silicon
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          mkdir dist
+          lipo -create -output runet-direct-universal \
+            raw/raw-x86_64-apple-darwin/runet-direct raw/raw-aarch64-apple-darwin/runet-direct
+          chmod +x runet-direct-universal
+          codesign --force --sign - runet-direct-universal
+          packaging/macos/build-pkg.sh runet-direct-universal "$v" dist/runet-direct-macos.pkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-macos
+          path: dist/*
+
+  package-windows:
+    needs: build
+    name: Windows setup.exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: raw-x86_64-pc-windows-msvc
+          path: raw
+      - run: choco install innosetup -y --no-progress
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          .\packaging\windows\build-installer.ps1 -Exe raw\runet-direct.exe -Version $v -Out dist\runet-direct-setup-x86_64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-windows
+          path: dist/*
 
   publish:
-    needs: build
+    needs: [build, package-linux, package-macos, package-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: dist
+          path: collected
+          pattern: "{archive-*,pkg-*}"
           merge-multiple: true
+      - name: Checksums of everything
+        run: |
+          cd collected
+          ls -la
+          sha256sum $(ls | grep -v -e '\.sha256$') > SHA256SUMS.txt
       - name: Attest build provenance (verifiable with `gh attestation verify`)
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
-            dist/*.tar.gz
-            dist/*.zip
+            collected/*.tar.gz
+            collected/*.zip
+            collected/*.deb
+            collected/*.rpm
+            collected/*.pkg
+            collected/*.exe
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: collected/*
           generate_release_notes: true

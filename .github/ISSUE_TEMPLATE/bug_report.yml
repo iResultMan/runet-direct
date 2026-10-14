@@ -1,0 +1,36 @@
+name: Something does not work
+description: A site goes through the VPN when it should not, the service fails, an installer breaks
+labels: [bug]
+body:
+  - type: dropdown
+    id: os
+    attributes:
+      label: System
+      options: [Windows, macOS (Intel), macOS (Apple Silicon), Linux]
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: Version (`runet-direct --version`)
+    validations: { required: true }
+  - type: input
+    id: vpn
+    attributes:
+      label: Which VPN, and how it is connected (app, WireGuard, OpenVPN ...)
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `runet-direct status --json`
+      render: json
+    validations: { required: true }
+  - type: textarea
+    id: check
+    attributes:
+      label: Output of `runet-direct check <address that misbehaves>`
+      description: Replace the placeholder with the IP or domain that goes the wrong way.
+      render: text
+  - type: textarea
+    id: what
+    attributes:
+      label: What you expected and what happened
+    validations: { required: true }

@@ -36,12 +36,21 @@ enum Cmd {
         /// Register the service but do not start it
         #[arg(long)]
         no_start: bool,
+        /// Keep the binary where it is (an installer or package manager put it there) instead of copying it
+        #[arg(long)]
+        in_place: bool,
+        /// Do not wait for the first sync (the country list is downloaded in the background)
+        #[arg(long)]
+        no_wait: bool,
     },
     /// Stop and remove the service and all routes it installed
     Uninstall {
         /// Also delete configuration, manual list and downloaded data
         #[arg(long)]
         purge: bool,
+        /// The binary belongs to an installer or package manager: leave it for them to remove
+        #[arg(long)]
+        in_place: bool,
     },
     /// Start the service
     Start,
@@ -227,8 +236,10 @@ fn main() {
     let mgr = service::current();
 
     match cli.cmd {
-        Cmd::Install { no_start } => install(&paths, net.as_ref(), mgr.as_ref(), no_start),
-        Cmd::Uninstall { purge } => uninstall(&paths, net.as_ref(), mgr.as_ref(), purge),
+        Cmd::Install { no_start, in_place, no_wait } => {
+            install(&paths, net.as_ref(), mgr.as_ref(), InstallOpts { no_start, in_place, no_wait })
+        }
+        Cmd::Uninstall { purge, in_place } => uninstall(&paths, net.as_ref(), mgr.as_ref(), purge, in_place),
         Cmd::Start => service_op(net.as_ref(), || mgr.start(), "started"),
         Cmd::Stop => service_op(net.as_ref(), || mgr.stop(), "stopped (routes stay in place; `runet-direct clear` removes them)"),
         Cmd::Restart => service_op(net.as_ref(), || mgr.restart(), "restarted"),
@@ -296,22 +307,43 @@ fn copy_binary(src: &Path, dst: &Path) -> Result<(), String> {
     std::fs::rename(&tmp, dst).map_err(|e| format!("replace {}: {e}", dst.display()))
 }
 
-fn install(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, no_start: bool) {
+struct InstallOpts {
+    no_start: bool,
+    in_place: bool,
+    no_wait: bool,
+}
+
+fn install(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, opts: InstallOpts) {
     need_admin(net);
     let exe = std::env::current_exe().unwrap_or_else(|e| die(format!("cannot locate this executable: {e}")));
-    if mgr.status().running {
+    if mgr.status().running && !opts.in_place {
         let _ = mgr.stop(); // an upgrade must be able to replace the binary
     }
     paths.write_defaults().unwrap_or_else(|e| die(format!("cannot create {}: {e}", paths.config_dir.display())));
-    copy_binary(&exe, &paths.install_bin).unwrap_or_else(|e| die(e));
-    mgr.install(&paths.install_bin, paths).unwrap_or_else(|e| die(e));
-    println!("installed: {} (managed by {})", paths.install_bin.display(), mgr.name());
+    let bin = if opts.in_place {
+        exe.clone()
+    } else {
+        copy_binary(&exe, &paths.install_bin).unwrap_or_else(|e| die(e));
+        paths.install_bin.clone()
+    };
+    mgr.install(&bin, paths).unwrap_or_else(|e| die(e));
+    println!("installed: {} (managed by {})", bin.display(), mgr.name());
     println!("configuration: {}", paths.config_dir.display());
-    if no_start {
+    if opts.no_start {
         println!("not started; run `runet-direct start`");
         return;
     }
-    mgr.start().unwrap_or_else(|e| die(e));
+    if opts.in_place && mgr.status().running {
+        mgr.restart().unwrap_or_else(|e| die(e)); // an upgraded package: pick up the new binary
+    } else {
+        mgr.start().unwrap_or_else(|e| die(e));
+    }
+    if opts.no_wait {
+        println!(
+            "started; the first sync (the country address list, ~18 MB) continues in the background. Check with `runet-direct status`."
+        );
+        return;
+    }
     let cfg = load_config_lenient(paths);
     println!("started; waiting for the first sync (downloads the country address list, ~18 MB)...");
     let start = Instant::now();
@@ -331,7 +363,7 @@ fn install(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, no_start: b
     println!("still working in the background; see `runet-direct status`.");
 }
 
-fn uninstall(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, purge: bool) {
+fn uninstall(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, purge: bool, in_place: bool) {
     need_admin(net);
     let cfg = load_config_lenient(paths);
     let _ = mgr.stop();
@@ -343,7 +375,9 @@ fn uninstall(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, purge: bo
         eprintln!("warning: {e}");
     }
     let exe = std::env::current_exe().ok();
-    if exe.as_deref().map(|e| !same_file(e, &paths.install_bin)).unwrap_or(true) {
+    if in_place {
+        // The installer or package manager owns the binary and removes it itself.
+    } else if exe.as_deref().map(|e| !same_file(e, &paths.install_bin)).unwrap_or(true) {
         let _ = std::fs::remove_file(&paths.install_bin);
     } else if !cfg!(windows) {
         let _ = std::fs::remove_file(&paths.install_bin); // unlinking a running binary is fine on Unix

@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://iresultman.github.io/runet-direct/sitemap.xml
