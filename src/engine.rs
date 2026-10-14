@@ -469,6 +469,8 @@ pub struct FamilyHealth {
     pub family: &'static str,
     pub uplink: Option<String>,
     pub rule_present: bool,
+    /// Linux: the priority of our `ip rule` right now (other tools should use a smaller number to be evaluated first).
+    pub rule_priority: Option<u32>,
     pub wanted: usize,
     pub installed: usize,
     pub missing: usize,
@@ -497,6 +499,7 @@ fn family_health(cfg: &Config, net: &dyn Net, state: &State, desired: &Desired, 
         family: fam.label(),
         uplink: None,
         rule_present: true,
+        rule_priority: None,
         wanted: wanted.len(),
         installed: 0,
         missing: wanted.len(),
@@ -526,6 +529,7 @@ fn family_health(cfg: &Config, net: &dyn Net, state: &State, desired: &Desired, 
         problems.push(tag(format!("cannot read ip rules: {e}")));
         false
     });
+    h.rule_priority = net.rule_priority(cfg, fam).unwrap_or(None);
     if !h.rule_present && net.name() == "linux" {
         problems.push(tag(format!("rule `from all lookup {}` (priority {}) is missing", cfg.routing.table, cfg.routing.priority)));
     }
@@ -656,6 +660,7 @@ pub fn run_daemon(paths: &Paths, net: &dyn Net) -> ! {
     let events = net.watch_command().map(|cmd| spawn_watcher(cmd, format!(" table {}", cfg.routing.table)));
     let mut last_err = String::new();
     let mut last_uplinks: BTreeMap<&'static str, Option<String>> = BTreeMap::new();
+    let mut last_skipped: BTreeMap<&'static str, Option<String>> = BTreeMap::new();
     let mut rerun = false;
 
     loop {
@@ -676,11 +681,16 @@ pub fn run_daemon(paths: &Paths, net: &dyn Net) -> ! {
                         log::info(format!("{} uplink: {}", f.family, f.uplink.as_deref().unwrap_or("none")));
                         last_uplinks.insert(f.family, f.uplink.clone());
                     }
-                    if let Some(s) = &f.skipped {
-                        if last_err != *s {
-                            log::warn(s);
-                            last_err = s.clone();
+                    if last_skipped.get(f.family) != Some(&f.skipped) {
+                        if let Some(s) = &f.skipped {
+                            // Having no IPv6 at all is normal; having no IPv4 uplink is worth a warning.
+                            if f.family == "IPv6" {
+                                log::info(s);
+                            } else {
+                                log::warn(s);
+                            }
                         }
+                        last_skipped.insert(f.family, f.skipped.clone());
                     }
                 }
                 if c.report.changed() {

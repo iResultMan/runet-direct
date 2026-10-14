@@ -250,6 +250,12 @@ nsx ip -6 rule add priority 700 from all lookup 880
 wait_for 10 "IPv6: rule at 700 shadowed ours -> moved above it (699)" has_rule 6 699
 expect "IPv6: russian traffic direct again" goes 2a02:6b8::1 dummy0
 grep -q "rule moved" "$WORK/daemon.log" && ok "the moves are logged" || die "no log line about the move"
+set +e; rd status --json >"$WORK/s2.json"; set -e
+python3 -c "
+import json
+f = {x['family']: x for x in json.load(open('$WORK/s2.json'))['health']['families']}
+assert (f['IPv4']['rule_priority'], f['IPv6']['rule_priority']) == (499, 699), (f['IPv4'], f['IPv6'])
+" && ok "status --json reports the moved rule priorities (499 / 699) for neighbouring tools" || die "rule_priority missing from status --json"
 set +e; rd check >/dev/null 2>&1; c=$?; set -e
 [[ $c -eq 0 ]] && ok "check reports healthy after the guard acted" || die "check exit code $c"
 

@@ -289,6 +289,11 @@ impl Net for Linux {
         Ok(rules.iter().any(|r| r.catch_all && r.table == Some(cfg.routing.table)))
     }
 
+    fn rule_priority(&self, cfg: &Config, fam: Family) -> Result<Option<u32>, String> {
+        let rules = parse_rules(&ip(&[fam.ip_flag(), "rule", "show"])?, &rt_labels());
+        Ok(rules.iter().filter(|r| r.catch_all && r.table == Some(cfg.routing.table)).map(|r| r.priority).min())
+    }
+
     fn ensure_rule(&self, cfg: &Config, fam: Family, probe: Option<IpAddr>) -> Result<Option<String>, String> {
         let labels = rt_labels();
         let f = fam.ip_flag();

@@ -39,6 +39,9 @@ runet-direct status
 
 Re-running `install` upgrades in place and keeps your settings.
 
+Release files carry a build-provenance attestation and a SHA-256 file. To verify a download independently of the
+installer: `gh attestation verify <file> --repo iResultMan/runet-direct`.
+
 ## What you will see
 
 ```

@@ -89,6 +89,12 @@ pub trait Net {
 
     fn rule_present(&self, cfg: &Config, fam: Family) -> Result<bool, String>;
 
+    /// Linux: the priority our rule currently has (it may have been moved above a VPN rule), so that
+    /// other tools can place their own rules in front of it. `None` elsewhere or when there is no rule.
+    fn rule_priority(&self, _: &Config, _: Family) -> Result<Option<u32>, String> {
+        Ok(None)
+    }
+
     /// Routes of ours currently installed. Linux: the whole private table. Elsewhere: routes in
     /// the shared table for `candidates` whose next hop is one of `ours`.
     fn installed(&self, cfg: &Config, fam: Family, candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Result<Vec<Installed>, String>;

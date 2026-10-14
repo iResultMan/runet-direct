@@ -402,7 +402,11 @@ fn status(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, as_json: boo
                 f.installed,
                 f.wanted,
                 yes(f.missing + f.stale > 0, &format!(" ({} missing, {} stale)", f.missing, f.stale), ""),
-                if net.name() == "linux" && !f.rule_present { "   [RULE MISSING]" } else { "" }
+                match (net.name() == "linux", f.rule_present, f.rule_priority) {
+                    (true, false, _) => "   [RULE MISSING]".to_string(),
+                    (true, true, Some(p)) => format!("   (rule priority {p})"),
+                    _ => String::new(),
+                }
             );
         }
     }
