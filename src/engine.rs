@@ -1,17 +1,17 @@
 //! Orchestration: build the wanted route set, compare it with the kernel, repair the
 //! difference, and run that in a loop as the daemon.
 
-use crate::cidr::{self, Cidr, Range};
+use crate::cidr::{self, Cidr, Family, Range};
 use crate::config::{Config, Paths};
 use crate::net::{make_plan, Installed, Net, Plan, Uplink};
 use crate::sources::{self, Target, Verdict};
 use crate::state::{Applied, Lock, Resolved, RuMeta, State};
 use crate::{fetch, log};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::BufReader;
-use std::net::ToSocketAddrs;
+use std::net::{IpAddr, ToSocketAddrs};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -25,19 +25,41 @@ const LOCK_WAIT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Default)]
 pub struct Desired {
-    pub routes: Vec<Cidr>,
-    /// The country list is on disk (or switched off), so absent routes may be pruned safely.
-    pub prune_ok: bool,
-    pub country_blocks: usize,
-    pub manual_direct: usize,
-    pub manual_vpn: usize,
+    pub v4: Vec<Cidr>,
+    pub v6: Vec<Cidr>,
+    /// Per family: the country list is on disk (or switched off), so absent routes may be pruned safely.
+    pub prune_v4: bool,
+    pub prune_v6: bool,
     pub warnings: Vec<String>,
 }
 
-fn read_country(paths: &Paths) -> Option<Vec<Range>> {
-    let text = fs::read_to_string(paths.ru_file()).ok()?;
-    let ranges: Vec<Range> = text.lines().filter_map(|l| Cidr::parse(l.trim())).map(|c| c.range()).collect();
-    (!ranges.is_empty()).then_some(ranges)
+impl Desired {
+    pub fn routes(&self, fam: Family) -> &[Cidr] {
+        match fam {
+            Family::V4 => &self.v4,
+            Family::V6 => &self.v6,
+        }
+    }
+
+    pub fn prune_ok(&self, fam: Family) -> bool {
+        match fam {
+            Family::V4 => self.prune_v4,
+            Family::V6 => self.prune_v6,
+        }
+    }
+}
+
+/// Country blocks from the cached list, split by family.
+fn read_country(paths: &Paths) -> (Vec<Range>, Vec<Range>) {
+    let Ok(text) = fs::read_to_string(paths.ru_file()) else { return (Vec::new(), Vec::new()) };
+    let (mut v4, mut v6) = (Vec::new(), Vec::new());
+    for c in text.lines().filter_map(|l| Cidr::parse(l.trim())) {
+        match c.fam {
+            Family::V4 => v4.push(c.range()),
+            Family::V6 => v6.push(c.range()),
+        }
+    }
+    (v4, v6)
 }
 
 fn read_manual(paths: &Paths) -> (Vec<sources::Entry>, Vec<String>) {
@@ -49,47 +71,47 @@ fn read_manual(paths: &Paths) -> (Vec<sources::Entry>, Vec<String>) {
 
 pub fn load_desired(paths: &Paths, cfg: &Config, state: &State, now: u64) -> Desired {
     let mut d = Desired::default();
-    let country = if cfg.ru.enabled {
-        match read_country(paths) {
-            Some(r) => {
-                d.prune_ok = true;
-                r
-            }
-            None => {
-                d.warnings.push("country list not downloaded yet".into());
-                Vec::new()
-            }
+    let (country4, country6) = if cfg.ru.enabled {
+        let (c4, c6) = read_country(paths);
+        d.prune_v4 = !c4.is_empty();
+        d.prune_v6 = !c6.is_empty();
+        if c4.is_empty() {
+            d.warnings.push("country list not downloaded yet".into());
         }
+        (c4, c6)
     } else {
-        d.prune_ok = true;
-        Vec::new()
+        d.prune_v4 = true;
+        d.prune_v6 = true;
+        (Vec::new(), Vec::new())
     };
-    d.country_blocks = country.len();
 
     let (entries, errors) = read_manual(paths);
     d.warnings.extend(errors);
-    let (mut direct, mut vpn): (Vec<Range>, Vec<Range>) = (Vec::new(), Vec::new());
+    let mut direct: [Vec<Range>; 2] = [Vec::new(), Vec::new()];
+    let mut vpn: [Vec<Range>; 2] = [Vec::new(), Vec::new()];
+    let slot = |f: Family| usize::from(f == Family::V6);
     for e in entries.iter().filter(|e| e.active(now)) {
-        let ranges: Vec<Range> = match &e.target {
-            Target::Net(c) => vec![c.range()],
+        let ranges: Vec<(Family, Range)> = match &e.target {
+            Target::Net(c) => vec![(c.fam, c.range())],
             Target::Host(h) => state
                 .resolved
                 .get(h)
-                .map(|r| r.ips.iter().filter_map(|ip| cidr::parse_ipv4(ip)).map(|a| (a, a)).collect())
+                .map(|r| {
+                    r.ips.iter().filter_map(|ip| ip.parse::<IpAddr>().ok()).map(|ip| (Family::of(&ip), sources::host_range(&ip))).collect()
+                })
                 .unwrap_or_default(),
         };
-        match e.verdict {
-            Verdict::Direct => {
-                d.manual_direct += 1;
-                direct.extend(ranges)
-            }
-            Verdict::Vpn => {
-                d.manual_vpn += 1;
-                vpn.extend(ranges)
+        for (fam, range) in ranges {
+            match e.verdict {
+                Verdict::Direct => direct[slot(fam)].push(range),
+                Verdict::Vpn => vpn[slot(fam)].push(range),
             }
         }
     }
-    d.routes = sources::compose(country, direct, vpn);
+    let [direct4, direct6] = direct;
+    let [vpn4, vpn6] = vpn;
+    d.v4 = sources::compose(Family::V4, country4, direct4, vpn4);
+    d.v6 = sources::compose(Family::V6, country6, direct6, vpn6);
     d
 }
 
@@ -111,15 +133,14 @@ fn next_expiry(paths: &Paths, now: u64) -> Option<u64> {
 /// Is everything currently sent through the VPN on purpose (`pause`)? `Some(None)` = until resumed.
 pub fn paused(paths: &Paths, now: u64) -> Option<Option<u64>> {
     let (entries, _) = read_manual(paths);
-    let all = Target::Net(Cidr { addr: 0, len: 0 });
-    entries.iter().find(|e| e.verdict == Verdict::Vpn && e.target == all && e.active(now)).map(|e| e.until)
+    entries
+        .iter()
+        .find(|e| e.verdict == Verdict::Vpn && e.active(now) && matches!(&e.target, Target::Net(c) if c.len == 0))
+        .map(|e| e.until)
 }
 
 fn resolve_host(host: &str) -> Vec<String> {
-    let mut ips: Vec<String> = (host, 0u16)
-        .to_socket_addrs()
-        .map(|it| it.filter_map(|a| if let std::net::SocketAddr::V4(v) = a { Some(v.ip().to_string()) } else { None }).collect())
-        .unwrap_or_default();
+    let mut ips: Vec<String> = (host, 0u16).to_socket_addrs().map(|it| it.map(|a| a.ip().to_string()).collect()).unwrap_or_default();
     ips.sort();
     ips.dedup();
     ips
@@ -137,7 +158,7 @@ fn refresh_hosts(paths: &Paths, state: &mut State, now: u64, force: bool) {
         }
         let ips = resolve_host(&h);
         if ips.is_empty() {
-            log::warn(format!("{h}: no IPv4 addresses (keeping previous ones)"));
+            log::warn(format!("{h}: no addresses (keeping previous ones)"));
             if let Some(r) = state.resolved.get_mut(&h) {
                 r.at = now.saturating_sub(HOST_TTL_SECS) + 600; // retry in ~10 minutes
             }
@@ -152,7 +173,8 @@ fn refresh_hosts(paths: &Paths, state: &mut State, now: u64, force: bool) {
 // ---------------------------------------------------------------------------
 
 pub struct Fetched {
-    pub blocks: Vec<Cidr>,
+    pub v4: Vec<Cidr>,
+    pub v6: Vec<Cidr>,
     pub snapshot: Option<String>,
 }
 
@@ -163,31 +185,39 @@ pub fn fetch_country(cfg: &Config, paths: &Paths, bind_iface: Option<&str>) -> R
     let result = fetch::download(&cfg.ru.source_url, &tmp, bind_iface).and_then(|()| {
         let file = fs::File::open(&tmp).map_err(|e| e.to_string())?;
         let list = sources::parse_ripe(BufReader::new(file), &cfg.ru.country, &["allocated", "assigned"]).map_err(|e| e.to_string())?;
-        let blocks = cidr::aggregate(list.ranges);
-        if blocks.len() < cfg.ru.min_prefixes {
+        let (v4, v6) = (cidr::aggregate(Family::V4, list.v4), cidr::aggregate(Family::V6, list.v6));
+        if v4.len() < cfg.ru.min_prefixes {
             return Err(format!(
-                "got {} blocks for {} (minimum {}); looks like a truncated or wrong file",
-                blocks.len(),
+                "got {} IPv4 blocks for {} (minimum {}); looks like a truncated or wrong file",
+                v4.len(),
                 cfg.ru.country,
                 cfg.ru.min_prefixes
             ));
         }
-        Ok(Fetched { blocks, snapshot: list.snapshot })
+        if cfg.ipv6.enabled && v6.len() < cfg.ru.min_prefixes / 10 {
+            return Err(format!(
+                "got {} IPv6 blocks for {} (minimum {}); looks like a truncated or wrong file",
+                v6.len(),
+                cfg.ru.country,
+                cfg.ru.min_prefixes / 10
+            ));
+        }
+        Ok(Fetched { v4, v6, snapshot: list.snapshot })
     });
     let _ = fs::remove_file(&tmp);
     result
 }
 
 fn store_country(paths: &Paths, state: &mut State, f: &Fetched, now: u64) -> std::io::Result<()> {
-    let mut text = String::with_capacity(f.blocks.len() * 18);
-    for b in &f.blocks {
+    let mut text = String::with_capacity((f.v4.len() + f.v6.len()) * 20);
+    for b in f.v4.iter().chain(&f.v6) {
         text.push_str(&b.to_string());
         text.push('\n');
     }
     let tmp = paths.ru_file().with_extension("txt.tmp");
     fs::write(&tmp, text)?;
     fs::rename(tmp, paths.ru_file())?;
-    state.ru = Some(RuMeta { fetched_at: now, snapshot: f.snapshot.clone(), count: f.blocks.len() });
+    state.ru = Some(RuMeta { fetched_at: now, snapshot: f.snapshot.clone(), count: f.v4.len(), count_v6: f.v6.len() });
     state.last_refresh_error = None;
     Ok(())
 }
@@ -208,7 +238,8 @@ fn needs_refresh(cfg: &Config, state: &State, now: u64) -> bool {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, Serialize)]
-pub struct Report {
+pub struct FamilyReport {
+    pub family: &'static str,
     pub uplink: Option<String>,
     pub wanted: usize,
     pub added: usize,
@@ -219,47 +250,82 @@ pub struct Report {
     pub skipped: Option<String>,
 }
 
-impl Report {
+impl FamilyReport {
     pub fn changed(&self) -> bool {
         self.added + self.removed > 0 || self.rule_change.is_some()
     }
 }
 
-pub fn reconcile(cfg: &Config, net: &dyn Net, state: &mut State, desired: &Desired) -> Result<Report, String> {
-    let mut report = Report { wanted: desired.routes.len(), ..Report::default() };
-    report.rule_change = net.ensure_rule(cfg, None)?;
+#[derive(Debug, Default, Serialize)]
+pub struct Report {
+    pub families: Vec<FamilyReport>,
+}
 
-    let Some(uplink) = net.uplink(cfg)? else {
-        report.skipped = Some("no physical uplink found; leaving routes as they are".into());
+impl Report {
+    pub fn changed(&self) -> bool {
+        self.families.iter().any(FamilyReport::changed)
+    }
+
+    fn sum(&self, f: impl Fn(&FamilyReport) -> usize) -> usize {
+        self.families.iter().map(f).sum()
+    }
+}
+
+fn key_of(fam: Family) -> String {
+    fam.key().to_string()
+}
+
+/// Bring one family's routes (and, on Linux, rule) to the wanted state.
+fn reconcile_family(cfg: &Config, net: &dyn Net, state: &mut State, desired: &Desired, fam: Family) -> Result<FamilyReport, String> {
+    let wanted = desired.routes(fam);
+    let mut report = FamilyReport { family: fam.label(), wanted: wanted.len(), ..FamilyReport::default() };
+    let was_active = state.active.contains(&key_of(fam));
+
+    // A machine without IPv6 must not turn into a permanent error: treat "cannot tell" as "none".
+    let uplink = match net.uplink(cfg, fam) {
+        Ok(u) => u,
+        Err(e) if fam == Family::V6 => {
+            report.skipped = Some(format!("IPv6 is not usable here ({e}); leaving it alone"));
+            None
+        }
+        Err(e) => return Err(e),
+    };
+    // IPv4 always gets its rule restored (even while the link is briefly gone); IPv6 only once it is in use.
+    if fam == Family::V4 || uplink.is_some() || was_active {
+        report.rule_change = net.ensure_rule(cfg, fam, None)?;
+    }
+    let Some(uplink) = uplink else {
+        report.skipped.get_or_insert_with(|| format!("no physical {} uplink found; leaving routes as they are", fam.label()));
         return Ok(report);
     };
     report.uplink = Some(uplink.describe());
 
     let mut ours: Vec<Uplink> = vec![uplink.clone()];
-    ours.extend(state.installed_uplink.clone());
-    let mut candidates: HashSet<Cidr> = desired.routes.iter().copied().collect();
-    candidates.extend(state.installed.iter().filter_map(|s| Cidr::parse(s)));
+    ours.extend(state.uplinks.get(fam.key()).cloned());
+    let mut candidates: HashSet<Cidr> = wanted.iter().copied().collect();
+    candidates.extend(state.installed.iter().filter_map(|s| Cidr::parse(s)).filter(|c| c.fam == fam));
 
-    let installed: Vec<Installed> = net.installed(cfg, &candidates, &ours)?;
-    let plan: Plan = make_plan(&desired.routes, &installed, &uplink, desired.prune_ok);
+    let installed: Vec<Installed> = net.installed(cfg, fam, &candidates, &ours)?;
+    let plan: Plan = make_plan(wanted, &installed, &uplink, desired.prune_ok(fam));
     report.kept = plan.keep;
     report.added = plan.add.len();
     report.removed = plan.remove.len();
 
     if !plan.is_empty() {
-        net.apply(cfg, &uplink, &plan)?;
-        state.last_apply =
-            Some(Applied { at: log::now(), added: report.added, removed: report.removed, total: report.wanted, uplink: uplink.describe() });
+        net.apply(cfg, fam, &uplink, &plan)?;
     }
     if net.tracks_ownership() {
-        state.installed = desired.routes.iter().map(|c| c.to_string()).collect();
+        state.installed.retain(|s| Cidr::parse(s).is_some_and(|c| c.fam != fam));
+        state.installed.extend(wanted.iter().map(|c| c.to_string()));
     }
-    state.installed_uplink = Some(uplink);
+    state.uplinks.insert(key_of(fam), uplink);
+    if !was_active {
+        state.active.push(key_of(fam));
+    }
 
     // With the routes in place, judge the rule by its effect: does a destination that must be direct
     // really leave through the physical link? If a VPN put its own rule in front, move ours above it.
-    let probe = desired.routes.first().map(probe_address);
-    if let Some(moved) = net.ensure_rule(cfg, probe)? {
+    if let Some(moved) = net.ensure_rule(cfg, fam, wanted.first().map(Cidr::probe))? {
         report.rule_change = Some(match report.rule_change.take() {
             Some(first) => format!("{first}; {moved}"),
             None => moved,
@@ -268,12 +334,40 @@ pub fn reconcile(cfg: &Config, net: &dyn Net, state: &mut State, desired: &Desir
     Ok(report)
 }
 
-/// An address inside `block` that is neither its network nor broadcast address.
-fn probe_address(block: &Cidr) -> u32 {
-    if block.len >= 31 {
-        block.first()
+/// Remove what we installed for a family that is no longer managed.
+fn clear_family(cfg: &Config, net: &dyn Net, state: &mut State, fam: Family) -> Result<usize, String> {
+    let candidates: HashSet<Cidr> = state.installed.iter().filter_map(|s| Cidr::parse(s)).filter(|c| c.fam == fam).collect();
+    let ours: Vec<Uplink> = state.uplinks.get(fam.key()).cloned().into_iter().chain(net.uplink(cfg, fam).ok().flatten()).collect();
+    let removed = net.clear(cfg, fam, &candidates, &ours)?;
+    state.installed.retain(|s| Cidr::parse(s).is_some_and(|c| c.fam != fam));
+    state.uplinks.remove(fam.key());
+    state.active.retain(|a| a != fam.key());
+    Ok(removed)
+}
+
+pub fn reconcile(cfg: &Config, net: &dyn Net, state: &mut State, desired: &Desired) -> Result<Report, String> {
+    let mut report = Report::default();
+    let mut errors = Vec::new();
+    for fam in cfg.families() {
+        match reconcile_family(cfg, net, state, desired, fam) {
+            Ok(r) => report.families.push(r),
+            Err(e) => errors.push(format!("{}: {e}", fam.label())),
+        }
+    }
+    if report.sum(|f| f.added + f.removed) > 0 {
+        let uplinks: Vec<String> = report.families.iter().filter_map(|f| f.uplink.as_ref().map(|u| format!("{}: {u}", f.family))).collect();
+        state.last_apply = Some(Applied {
+            at: log::now(),
+            added: report.sum(|f| f.added),
+            removed: report.sum(|f| f.removed),
+            total: report.families.iter().filter(|f| f.uplink.is_some()).map(|f| f.wanted).sum(),
+            uplink: uplinks.join("; "),
+        });
+    }
+    if errors.is_empty() {
+        Ok(report)
     } else {
-        block.first() + 1
+        Err(errors.join("; "))
     }
 }
 
@@ -293,7 +387,7 @@ pub fn cycle(paths: &Paths, cfg: &Config, net: &dyn Net, opts: &CycleOpts) -> Re
     let pre = State::load(paths);
     let want_fetch = cfg.ru.enabled && (opts.force_refresh || needs_refresh(cfg, &pre, now));
     let fetched = if want_fetch {
-        let dev = net.uplink(cfg).ok().flatten().map(|u| u.dev);
+        let dev = cfg.families().into_iter().find_map(|f| net.uplink(cfg, f).ok().flatten()).map(|u| u.dev);
         let dev = dev.filter(|d| d.parse::<u32>().is_err()); // Windows reports an index, not a name
         Some(fetch_country(cfg, paths, dev.as_deref()))
     } else {
@@ -308,14 +402,23 @@ pub fn cycle(paths: &Paths, cfg: &Config, net: &dyn Net, opts: &CycleOpts) -> Re
             Ok(f) => {
                 store_country(paths, &mut state, &f, now).map_err(|e| format!("cannot store the country list: {e}"))?;
                 log::info(format!(
-                    "country list updated: {} blocks (RIPE snapshot {})",
-                    f.blocks.len(),
+                    "country list updated: {} IPv4 + {} IPv6 blocks (RIPE snapshot {})",
+                    f.v4.len(),
+                    f.v6.len(),
                     f.snapshot.as_deref().unwrap_or("unknown")
                 ));
             }
             Err(e) => {
                 log::warn(format!("country list download failed: {e}"));
                 state.last_refresh_error = Some(e);
+            }
+        }
+    }
+    for fam in Family::ALL {
+        if !cfg.enabled(fam) && state.active.contains(&key_of(fam)) {
+            match clear_family(cfg, net, &mut state, fam) {
+                Ok(n) => log::info(format!("{} is disabled: removed {n} routes", fam.label())),
+                Err(e) => log::warn(format!("{} is disabled but cleaning up failed: {e}", fam.label())),
             }
         }
     }
@@ -328,20 +431,25 @@ pub fn cycle(paths: &Paths, cfg: &Config, net: &dyn Net, opts: &CycleOpts) -> Re
     result.map(|report| Cycle { report, desired })
 }
 
-/// Remove everything we installed.
+/// Remove everything we installed, for both families whether or not they are enabled.
 pub fn clear(paths: &Paths, cfg: &Config, net: &dyn Net) -> Result<usize, String> {
     let _lock = Lock::acquire(paths, LOCK_WAIT)?;
     let mut state = State::load(paths);
-    let desired = load_desired(paths, cfg, &state, log::now());
-    let mut candidates: HashSet<Cidr> = desired.routes.iter().copied().collect();
-    candidates.extend(state.installed.iter().filter_map(|s| Cidr::parse(s)));
-    let mut ours: Vec<Uplink> = state.installed_uplink.clone().into_iter().collect();
-    ours.extend(net.uplink(cfg).ok().flatten());
-    let removed = net.clear(cfg, &candidates, &ours)?;
-    state.installed.clear();
-    state.installed_uplink = None;
+    let mut total = 0;
+    let mut errors = Vec::new();
+    for fam in Family::ALL {
+        match clear_family(cfg, net, &mut state, fam) {
+            Ok(n) => total += n,
+            Err(_) if fam == Family::V6 => {} // no IPv6 support on this machine: nothing to remove
+            Err(e) => errors.push(format!("{}: {e}", fam.label())),
+        }
+    }
     let _ = state.save(paths);
-    Ok(removed)
+    if errors.is_empty() {
+        Ok(total)
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -357,22 +465,109 @@ pub struct Sample {
 }
 
 #[derive(Debug, Serialize)]
-pub struct Health {
-    pub healthy: bool,
-    pub problems: Vec<String>,
+pub struct FamilyHealth {
+    pub family: &'static str,
     pub uplink: Option<String>,
-    pub tunnels: Vec<String>,
     pub rule_present: bool,
     pub wanted: usize,
     pub installed: usize,
     pub missing: usize,
     pub stale: usize,
+    pub samples: Vec<Sample>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Health {
+    pub healthy: bool,
+    pub problems: Vec<String>,
+    pub tunnels: Vec<String>,
+    pub families: Vec<FamilyHealth>,
     pub country_blocks: Option<usize>,
+    pub country_blocks_v6: Option<usize>,
     pub country_snapshot: Option<String>,
     pub country_age_days: Option<u64>,
-    pub samples: Vec<Sample>,
     /// Everything is routed through the VPN on purpose; `Some(None)` means until `resume`.
     pub paused: Option<Option<u64>>,
+}
+
+fn family_health(cfg: &Config, net: &dyn Net, state: &State, desired: &Desired, fam: Family, problems: &mut Vec<String>) -> FamilyHealth {
+    let tag = |m: String| if cfg.families().len() > 1 { format!("{}: {m}", fam.label()) } else { m };
+    let wanted = desired.routes(fam);
+    let mut h = FamilyHealth {
+        family: fam.label(),
+        uplink: None,
+        rule_present: true,
+        wanted: wanted.len(),
+        installed: 0,
+        missing: wanted.len(),
+        stale: 0,
+        samples: Vec::new(),
+    };
+    let was_active = state.active.contains(&key_of(fam));
+
+    let uplink = net.uplink(cfg, fam).unwrap_or_else(|e| {
+        if fam == Family::V4 || was_active {
+            problems.push(tag(format!("cannot detect the uplink: {e}")));
+        }
+        None
+    });
+    let Some(up) = uplink else {
+        // A machine may simply have no IPv6; that is a problem only if we were using it.
+        if fam == Family::V4 || was_active {
+            problems.push(tag("no physical uplink found".into()));
+        } else {
+            h.missing = 0;
+        }
+        return h;
+    };
+    h.uplink = Some(up.describe());
+
+    h.rule_present = net.rule_present(cfg, fam).unwrap_or_else(|e| {
+        problems.push(tag(format!("cannot read ip rules: {e}")));
+        false
+    });
+    if !h.rule_present && net.name() == "linux" {
+        problems.push(tag(format!("rule `from all lookup {}` (priority {}) is missing", cfg.routing.table, cfg.routing.priority)));
+    }
+
+    let mut candidates: HashSet<Cidr> = wanted.iter().copied().collect();
+    candidates.extend(state.installed.iter().filter_map(|s| Cidr::parse(s)).filter(|c| c.fam == fam));
+    let mut ours = vec![up.clone()];
+    ours.extend(state.uplinks.get(fam.key()).cloned());
+    match net.installed(cfg, fam, &candidates, &ours) {
+        Ok(inst) => {
+            let plan = make_plan(wanted, &inst, &up, true);
+            h.installed = plan.keep;
+            h.missing = plan.add.len();
+            h.stale = plan.remove.len();
+        }
+        Err(e) => problems.push(tag(format!("cannot read the routing table: {e}"))),
+    }
+    if h.missing > 0 {
+        problems.push(tag(format!("{} wanted routes are missing", h.missing)));
+    }
+    if h.stale > 0 {
+        problems.push(tag(format!("{} routes do not match the wanted set", h.stale)));
+    }
+
+    let n = wanted.len();
+    if n > 0 {
+        let mut idx: Vec<usize> = (0..6).map(|i| i * (n - 1) / 5).collect();
+        idx.dedup();
+        for i in idx {
+            let ip = wanted[i].probe();
+            match net.lookup(cfg, ip) {
+                Ok(l) => {
+                    if l.tunnel {
+                        problems.push(tag(format!("{ip} would leave through the tunnel {}", l.dev)));
+                    }
+                    h.samples.push(Sample { ip: ip.to_string(), dev: l.dev, via: l.via, tunnel: l.tunnel });
+                }
+                Err(e) => problems.push(tag(format!("route lookup for {ip} failed: {e}"))),
+            }
+        }
+    }
+    h
 }
 
 pub fn health(paths: &Paths, cfg: &Config, net: &dyn Net) -> Health {
@@ -381,63 +576,8 @@ pub fn health(paths: &Paths, cfg: &Config, net: &dyn Net) -> Health {
     let desired = load_desired(paths, cfg, &state, now);
     let mut problems = Vec::new();
 
-    let rule_present = net.rule_present(cfg).unwrap_or_else(|e| {
-        problems.push(format!("cannot read ip rules: {e}"));
-        false
-    });
-    if !rule_present && net.name() == "linux" {
-        problems.push(format!("rule `from all lookup {}` (priority {}) is missing", cfg.routing.table, cfg.routing.priority));
-    }
-
-    let uplink = net.uplink(cfg).unwrap_or_else(|e| {
-        problems.push(format!("cannot detect the uplink: {e}"));
-        None
-    });
-    if uplink.is_none() {
-        problems.push("no physical uplink found".into());
-    }
-
-    let (mut installed_ok, mut missing, mut stale) = (0, desired.routes.len(), 0);
-    if let Some(up) = &uplink {
-        let mut candidates: HashSet<Cidr> = desired.routes.iter().copied().collect();
-        candidates.extend(state.installed.iter().filter_map(|s| Cidr::parse(s)));
-        let mut ours = vec![up.clone()];
-        ours.extend(state.installed_uplink.clone());
-        match net.installed(cfg, &candidates, &ours) {
-            Ok(inst) => {
-                let plan = make_plan(&desired.routes, &inst, up, true);
-                installed_ok = plan.keep;
-                missing = plan.add.len();
-                stale = plan.remove.len();
-            }
-            Err(e) => problems.push(format!("cannot read the routing table: {e}")),
-        }
-    }
-    if missing > 0 {
-        problems.push(format!("{missing} wanted routes are missing"));
-    }
-    if stale > 0 {
-        problems.push(format!("{stale} routes do not match the wanted set"));
-    }
-
-    let mut samples = Vec::new();
-    let n = desired.routes.len();
-    if n > 0 {
-        let mut idx: Vec<usize> = (0..6).map(|i| i * (n - 1) / 5).collect();
-        idx.dedup();
-        for i in idx {
-            let ip = probe_address(&desired.routes[i]);
-            match net.lookup(cfg, ip) {
-                Ok(l) => {
-                    if l.tunnel {
-                        problems.push(format!("{} would leave through the tunnel {}", cidr::fmt_ipv4(ip), l.dev));
-                    }
-                    samples.push(Sample { ip: cidr::fmt_ipv4(ip), dev: l.dev, via: l.via, tunnel: l.tunnel });
-                }
-                Err(e) => problems.push(format!("route lookup for {} failed: {e}", cidr::fmt_ipv4(ip))),
-            }
-        }
-    }
+    let families: Vec<FamilyHealth> =
+        cfg.families().into_iter().map(|f| family_health(cfg, net, &state, &desired, f, &mut problems)).collect();
 
     let age = state.ru.as_ref().map(|m| now.saturating_sub(m.fetched_at) / 86_400);
     if cfg.ru.enabled {
@@ -458,17 +598,12 @@ pub fn health(paths: &Paths, cfg: &Config, net: &dyn Net) -> Health {
     Health {
         healthy: problems.is_empty(),
         problems,
-        uplink: uplink.map(|u| u.describe()),
         tunnels: net.tunnels(),
-        rule_present,
-        wanted: desired.routes.len(),
-        installed: installed_ok,
-        missing,
-        stale,
+        families,
         country_blocks: state.ru.as_ref().map(|m| m.count),
+        country_blocks_v6: state.ru.as_ref().map(|m| m.count_v6),
         country_snapshot: state.ru.as_ref().and_then(|m| m.snapshot.clone()),
         country_age_days: age,
-        samples,
         paused: paused(paths, now),
     }
 }
@@ -512,45 +647,6 @@ fn settle(rx: &Receiver<()>) -> bool {
     seen
 }
 
-fn run_hook(cmd: &str, changed: bool) {
-    if cmd.trim().is_empty() {
-        return;
-    }
-    let mut c = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.args(["/C", cmd]);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.args(["-c", cmd]);
-        c
-    };
-    c.env("RUNET_DIRECT_CHANGED", if changed { "1" } else { "0" }).stdin(Stdio::null());
-    match c.spawn() {
-        Ok(mut child) => {
-            let start = Instant::now();
-            loop {
-                match child.try_wait() {
-                    Ok(Some(st)) => {
-                        if !st.success() {
-                            log::warn(format!("hook exited with {st}"));
-                        }
-                        break;
-                    }
-                    Ok(None) if start.elapsed() > Duration::from_secs(120) => {
-                        let _ = child.kill();
-                        log::warn("hook killed after 120 s");
-                        break;
-                    }
-                    Ok(None) => std::thread::sleep(Duration::from_millis(200)),
-                    Err(_) => break,
-                }
-            }
-        }
-        Err(e) => log::warn(format!("cannot run hook: {e}")),
-    }
-}
-
 pub fn run_daemon(paths: &Paths, net: &dyn Net) -> ! {
     log::info(format!("runet-direct {} started ({})", env!("CARGO_PKG_VERSION"), net.name()));
     let mut cfg = Config::default();
@@ -559,8 +655,7 @@ pub fn run_daemon(paths: &Paths, net: &dyn Net) -> ! {
     }
     let events = net.watch_command().map(|cmd| spawn_watcher(cmd, format!(" table {}", cfg.routing.table)));
     let mut last_err = String::new();
-    let mut last_uplink: Option<String> = None;
-    let mut triggered = true;
+    let mut last_uplinks: BTreeMap<&'static str, Option<String>> = BTreeMap::new();
     let mut rerun = false;
 
     loop {
@@ -576,32 +671,34 @@ pub fn run_daemon(paths: &Paths, net: &dyn Net) -> ! {
         match cycle(paths, &cfg, net, &CycleOpts::default()) {
             Ok(c) => {
                 last_err.clear();
-                let r = &c.report;
-                if r.uplink != last_uplink {
-                    log::info(format!("uplink: {}", r.uplink.as_deref().unwrap_or("none")));
-                    last_uplink = r.uplink.clone();
+                for f in &c.report.families {
+                    if last_uplinks.get(f.family) != Some(&f.uplink) {
+                        log::info(format!("{} uplink: {}", f.family, f.uplink.as_deref().unwrap_or("none")));
+                        last_uplinks.insert(f.family, f.uplink.clone());
+                    }
+                    if let Some(s) = &f.skipped {
+                        if last_err != *s {
+                            log::warn(s);
+                            last_err = s.clone();
+                        }
+                    }
                 }
-                if r.changed() {
-                    log::info(format!(
-                        "synced: +{} -{} (total {}){}",
-                        r.added,
-                        r.removed,
-                        r.wanted,
-                        r.rule_change.as_deref().map(|c| format!("; {c}")).unwrap_or_default()
-                    ));
+                if c.report.changed() {
+                    let parts: Vec<String> = c
+                        .report
+                        .families
+                        .iter()
+                        .filter(|f| f.changed())
+                        .map(|f| {
+                            let rule = f.rule_change.as_deref().map(|r| format!("; {r}")).unwrap_or_default();
+                            format!("{}: +{} -{} (total {}){rule}", f.family, f.added, f.removed, f.wanted)
+                        })
+                        .collect();
+                    log::info(format!("synced: {}", parts.join(" | ")));
                     // Our own changes echo through the watcher; wait until it is quiet again.
                     if let Some(rx) = &events {
                         rerun = settle(rx);
                     }
-                }
-                if let Some(s) = &r.skipped {
-                    if last_err != *s {
-                        log::warn(s);
-                        last_err = s.clone();
-                    }
-                }
-                if triggered || r.changed() {
-                    run_hook(&cfg.daemon.hook, r.changed());
                 }
             }
             Err(e) => {
@@ -612,31 +709,23 @@ pub fn run_daemon(paths: &Paths, net: &dyn Net) -> ! {
             }
         }
         if std::mem::take(&mut rerun) {
-            triggered = true;
             continue;
         }
         let mut wait = Duration::from_secs(cfg.daemon.interval_seconds.max(5));
         if let Some(secs) = next_expiry(paths, log::now()) {
             wait = wait.min(Duration::from_secs(secs + 1));
         }
-        triggered = match &events {
+        match &events {
             Some(rx) => match rx.recv_timeout(wait) {
                 Ok(()) => {
                     std::thread::sleep(Duration::from_millis(500));
                     settle(rx);
-                    true
                 }
-                Err(RecvTimeoutError::Timeout) => false,
-                Err(RecvTimeoutError::Disconnected) => {
-                    std::thread::sleep(wait);
-                    false
-                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => std::thread::sleep(wait),
             },
-            None => {
-                std::thread::sleep(wait);
-                false
-            }
-        };
+            None => std::thread::sleep(wait),
+        }
     }
 }
 
@@ -646,16 +735,29 @@ mod tests {
     use crate::net::Lookup;
     use std::cell::RefCell;
 
+    #[derive(Default)]
     struct FakeNet {
-        uplink: RefCell<Option<Uplink>>,
+        uplinks: RefCell<BTreeMap<Family, Uplink>>,
         table: RefCell<Vec<Installed>>,
-        rule: RefCell<bool>,
+        rules: RefCell<HashSet<Family>>,
         applied: RefCell<usize>,
     }
 
     impl FakeNet {
-        fn new(up: Option<Uplink>) -> FakeNet {
-            FakeNet { uplink: RefCell::new(up), table: RefCell::default(), rule: RefCell::new(false), applied: RefCell::new(0) }
+        fn with(v4: Option<Uplink>, v6: Option<Uplink>) -> FakeNet {
+            let n = FakeNet::default();
+            n.set(Family::V4, v4);
+            n.set(Family::V6, v6);
+            n
+        }
+        fn set(&self, fam: Family, u: Option<Uplink>) {
+            match u {
+                Some(u) => self.uplinks.borrow_mut().insert(fam, u),
+                None => self.uplinks.borrow_mut().remove(&fam),
+            };
+        }
+        fn count(&self, fam: Family) -> usize {
+            self.table.borrow().iter().filter(|i| i.prefix.fam == fam).count()
         }
     }
 
@@ -666,22 +768,22 @@ mod tests {
         fn require_admin(&self) -> Result<(), String> {
             Ok(())
         }
-        fn uplink(&self, _: &Config) -> Result<Option<Uplink>, String> {
-            Ok(self.uplink.borrow().clone())
+        fn uplink(&self, _: &Config, fam: Family) -> Result<Option<Uplink>, String> {
+            Ok(self.uplinks.borrow().get(&fam).cloned())
         }
         fn tunnels(&self) -> Vec<String> {
             vec![]
         }
-        fn ensure_rule(&self, _: &Config, _: Option<u32>) -> Result<Option<String>, String> {
-            Ok((!self.rule.replace(true)).then(|| "rule restored".to_string()))
+        fn ensure_rule(&self, _: &Config, fam: Family, _: Option<IpAddr>) -> Result<Option<String>, String> {
+            Ok(self.rules.borrow_mut().insert(fam).then(|| "rule restored".to_string()))
         }
-        fn rule_present(&self, _: &Config) -> Result<bool, String> {
-            Ok(*self.rule.borrow())
+        fn rule_present(&self, _: &Config, fam: Family) -> Result<bool, String> {
+            Ok(self.rules.borrow().contains(&fam))
         }
-        fn installed(&self, _: &Config, _: &HashSet<Cidr>, _: &[Uplink]) -> Result<Vec<Installed>, String> {
-            Ok(self.table.borrow().clone())
+        fn installed(&self, _: &Config, fam: Family, _: &HashSet<Cidr>, _: &[Uplink]) -> Result<Vec<Installed>, String> {
+            Ok(self.table.borrow().iter().filter(|i| i.prefix.fam == fam).cloned().collect())
         }
-        fn apply(&self, _: &Config, up: &Uplink, plan: &Plan) -> Result<(), String> {
+        fn apply(&self, _: &Config, _: Family, up: &Uplink, plan: &Plan) -> Result<(), String> {
             *self.applied.borrow_mut() += 1;
             let mut t = self.table.borrow_mut();
             t.retain(|i| !plan.remove.contains(i));
@@ -690,10 +792,13 @@ mod tests {
             }
             Ok(())
         }
-        fn clear(&self, _: &Config, _: &HashSet<Cidr>, _: &[Uplink]) -> Result<usize, String> {
-            Ok(0)
+        fn clear(&self, _: &Config, fam: Family, _: &HashSet<Cidr>, _: &[Uplink]) -> Result<usize, String> {
+            let before = self.count(fam);
+            self.table.borrow_mut().retain(|i| i.prefix.fam != fam);
+            self.rules.borrow_mut().remove(&fam);
+            Ok(before)
         }
-        fn lookup(&self, _: &Config, _: u32) -> Result<Lookup, String> {
+        fn lookup(&self, _: &Config, _: IpAddr) -> Result<Lookup, String> {
             unimplemented!()
         }
         fn watch_command(&self) -> Option<Vec<String>> {
@@ -708,17 +813,25 @@ mod tests {
         Uplink { dev: "eth0".into(), via: Some(via.into()) }
     }
 
-    fn desired(blocks: &[&str], prune_ok: bool) -> Desired {
-        Desired { routes: blocks.iter().map(|b| Cidr::parse(b).unwrap()).collect(), prune_ok, ..Desired::default() }
+    fn v4only() -> Config {
+        let mut c = Config::default();
+        c.ipv6.enabled = false;
+        c
+    }
+
+    fn desired(v4: &[&str], v6: &[&str], prune_ok: bool) -> Desired {
+        let parse = |l: &[&str]| l.iter().map(|b| Cidr::parse(b).unwrap()).collect();
+        Desired { v4: parse(v4), v6: parse(v6), prune_v4: prune_ok, prune_v6: prune_ok, ..Desired::default() }
     }
 
     #[test]
     fn first_pass_installs_rule_and_routes_and_second_pass_is_quiet() {
-        let net = FakeNet::new(Some(up("10.0.0.1")));
-        let (cfg, mut st) = (Config::default(), State::default());
-        let d = desired(&["5.0.0.0/8", "6.0.0.0/8"], true);
+        let net = FakeNet::with(Some(up("10.0.0.1")), None);
+        let (cfg, mut st) = (v4only(), State::default());
+        let d = desired(&["5.0.0.0/8", "6.0.0.0/8"], &[], true);
         let r1 = reconcile(&cfg, &net, &mut st, &d).unwrap();
-        assert_eq!((r1.added, r1.removed, r1.rule_change.is_some()), (2, 0, true));
+        assert_eq!((r1.sum(|f| f.added), r1.sum(|f| f.removed), r1.changed()), (2, 0, true));
+        assert!(r1.families[0].rule_change.is_some());
         let r2 = reconcile(&cfg, &net, &mut st, &d).unwrap();
         assert!(!r2.changed());
         assert_eq!(*net.applied.borrow(), 1);
@@ -726,57 +839,101 @@ mod tests {
 
     #[test]
     fn a_vanished_rule_is_restored_even_without_route_changes() {
-        let net = FakeNet::new(Some(up("10.0.0.1")));
-        let (cfg, mut st) = (Config::default(), State::default());
-        let d = desired(&["5.0.0.0/8"], true);
+        let net = FakeNet::with(Some(up("10.0.0.1")), None);
+        let (cfg, mut st) = (v4only(), State::default());
+        let d = desired(&["5.0.0.0/8"], &[], true);
         reconcile(&cfg, &net, &mut st, &d).unwrap();
-        *net.rule.borrow_mut() = false; // tethering removed the rule
+        net.rules.borrow_mut().clear(); // tethering removed the rule
         let r = reconcile(&cfg, &net, &mut st, &d).unwrap();
-        assert!(r.rule_change.is_some() && r.added == 0);
+        assert!(r.families[0].rule_change.is_some() && r.sum(|f| f.added) == 0);
     }
 
     #[test]
     fn a_new_gateway_repoints_every_route() {
-        let net = FakeNet::new(Some(up("10.0.0.1")));
-        let (cfg, mut st) = (Config::default(), State::default());
-        let d = desired(&["5.0.0.0/8", "6.0.0.0/8"], true);
+        let net = FakeNet::with(Some(up("10.0.0.1")), None);
+        let (cfg, mut st) = (v4only(), State::default());
+        let d = desired(&["5.0.0.0/8", "6.0.0.0/8"], &[], true);
         reconcile(&cfg, &net, &mut st, &d).unwrap();
-        *net.uplink.borrow_mut() = Some(up("192.168.1.1"));
+        net.set(Family::V4, Some(up("192.168.1.1")));
         let r = reconcile(&cfg, &net, &mut st, &d).unwrap();
-        assert_eq!((r.added, r.removed), (2, 2));
+        assert_eq!((r.sum(|f| f.added), r.sum(|f| f.removed)), (2, 2));
         assert!(net.table.borrow().iter().all(|i| i.via.as_deref() == Some("192.168.1.1")));
     }
 
     #[test]
     fn without_an_uplink_nothing_is_touched_but_the_rule_is_kept() {
-        let net = FakeNet::new(Some(up("10.0.0.1")));
-        let (cfg, mut st) = (Config::default(), State::default());
-        let d = desired(&["5.0.0.0/8"], true);
+        let net = FakeNet::with(Some(up("10.0.0.1")), None);
+        let (cfg, mut st) = (v4only(), State::default());
+        let d = desired(&["5.0.0.0/8"], &[], true);
         reconcile(&cfg, &net, &mut st, &d).unwrap();
-        *net.uplink.borrow_mut() = None;
-        *net.rule.borrow_mut() = false;
+        net.set(Family::V4, None);
+        net.rules.borrow_mut().clear();
         let r = reconcile(&cfg, &net, &mut st, &d).unwrap();
-        assert!(r.skipped.is_some() && r.rule_change.is_some());
+        assert!(r.families[0].skipped.is_some() && r.families[0].rule_change.is_some());
         assert_eq!(net.table.borrow().len(), 1, "routes must survive a lost uplink");
     }
 
     #[test]
     fn a_missing_country_list_never_wipes_the_table() {
-        let net = FakeNet::new(Some(up("10.0.0.1")));
-        let (cfg, mut st) = (Config::default(), State::default());
-        reconcile(&cfg, &net, &mut st, &desired(&["5.0.0.0/8", "6.0.0.0/8"], true)).unwrap();
-        let r = reconcile(&cfg, &net, &mut st, &desired(&["7.0.0.0/8"], false)).unwrap();
-        assert_eq!((r.added, r.removed), (1, 0));
+        let net = FakeNet::with(Some(up("10.0.0.1")), None);
+        let (cfg, mut st) = (v4only(), State::default());
+        reconcile(&cfg, &net, &mut st, &desired(&["5.0.0.0/8", "6.0.0.0/8"], &[], true)).unwrap();
+        let r = reconcile(&cfg, &net, &mut st, &desired(&["7.0.0.0/8"], &[], false)).unwrap();
+        assert_eq!((r.sum(|f| f.added), r.sum(|f| f.removed)), (1, 0));
         assert_eq!(net.table.borrow().len(), 3);
     }
 
     #[test]
     fn removing_a_target_removes_its_route() {
-        let net = FakeNet::new(Some(up("10.0.0.1")));
+        let net = FakeNet::with(Some(up("10.0.0.1")), None);
+        let (cfg, mut st) = (v4only(), State::default());
+        reconcile(&cfg, &net, &mut st, &desired(&["5.0.0.0/8", "6.0.0.0/8"], &[], true)).unwrap();
+        let r = reconcile(&cfg, &net, &mut st, &desired(&["5.0.0.0/8"], &[], true)).unwrap();
+        assert_eq!((r.sum(|f| f.added), r.sum(|f| f.removed)), (0, 1));
+    }
+
+    #[test]
+    fn both_families_are_reconciled_independently() {
+        let net = FakeNet::with(Some(up("10.0.0.1")), Some(up("fe80::1")));
         let (cfg, mut st) = (Config::default(), State::default());
-        reconcile(&cfg, &net, &mut st, &desired(&["5.0.0.0/8", "6.0.0.0/8"], true)).unwrap();
-        let r = reconcile(&cfg, &net, &mut st, &desired(&["5.0.0.0/8"], true)).unwrap();
-        assert_eq!((r.added, r.removed), (0, 1));
+        let d = desired(&["5.0.0.0/8"], &["2a00:1450::/32", "2a02:6b8::/32"], true);
+        let r = reconcile(&cfg, &net, &mut st, &d).unwrap();
+        assert_eq!((net.count(Family::V4), net.count(Family::V6)), (1, 2));
+        assert_eq!(r.families.len(), 2);
+        assert!(st.active.contains(&"ipv4".to_string()) && st.active.contains(&"ipv6".to_string()));
+        // The IPv6 gateway changes; IPv4 must not be touched.
+        net.set(Family::V6, Some(up("fe80::2")));
+        let r = reconcile(&cfg, &net, &mut st, &d).unwrap();
+        assert_eq!((r.families[0].changed(), r.families[1].added, r.families[1].removed), (false, 2, 2));
+    }
+
+    #[test]
+    fn a_machine_without_ipv6_stays_quiet() {
+        let net = FakeNet::with(Some(up("10.0.0.1")), None);
+        let (cfg, mut st) = (Config::default(), State::default());
+        let r = reconcile(&cfg, &net, &mut st, &desired(&["5.0.0.0/8"], &["2a00:1450::/32"], true)).unwrap();
+        assert_eq!(net.count(Family::V6), 0);
+        assert!(!net.rules.borrow().contains(&Family::V6), "no IPv6 rule is created without an IPv6 uplink");
+        assert!(!st.active.contains(&"ipv6".to_string()));
+        assert!(r.families[1].skipped.is_some());
+    }
+
+    #[test]
+    fn a_disabled_family_is_cleaned_up_once_and_then_left_alone() {
+        let net = FakeNet::with(Some(up("10.0.0.1")), Some(up("fe80::1")));
+        let (cfg, mut st) = (Config::default(), State::default());
+        let d = desired(&["5.0.0.0/8"], &["2a00:1450::/32"], true);
+        reconcile(&cfg, &net, &mut st, &d).unwrap();
+        assert_eq!(net.count(Family::V6), 1);
+
+        let off = v4only();
+        assert!(st.active.contains(&"ipv6".to_string()));
+        assert_eq!(clear_family(&off, &net, &mut st, Family::V6).unwrap(), 1);
+        assert_eq!(net.count(Family::V6), 0);
+        assert!(!st.active.contains(&"ipv6".to_string()));
+        let r = reconcile(&off, &net, &mut st, &d).unwrap();
+        assert_eq!(r.families.len(), 1, "a disabled family is not reconciled");
+        assert_eq!(net.count(Family::V4), 1, "the other family is untouched");
     }
 
     #[test]
@@ -786,10 +943,10 @@ mod tests {
         assert!(needs_refresh(&cfg, &st, 100_000_000), "no list yet -> fetch");
         st.last_refresh_attempt = 99_999_950;
         assert!(!needs_refresh(&cfg, &st, 100_000_000), "just failed -> back off");
-        st.ru = Some(RuMeta { fetched_at: 100_000_000 - 3 * 86_400, snapshot: None, count: 1 });
+        st.ru = Some(RuMeta { fetched_at: 100_000_000 - 3 * 86_400, snapshot: None, count: 1, count_v6: 0 });
         st.last_refresh_attempt = 0;
         assert!(!needs_refresh(&cfg, &st, 100_000_000), "fresh list");
-        st.ru = Some(RuMeta { fetched_at: 100_000_000 - 31 * 86_400, snapshot: None, count: 1 });
+        st.ru = Some(RuMeta { fetched_at: 100_000_000 - 31 * 86_400, snapshot: None, count: 1, count_v6: 0 });
         assert!(needs_refresh(&cfg, &st, 100_000_000), "stale list");
         let mut off = Config::default();
         off.ru.enabled = false;

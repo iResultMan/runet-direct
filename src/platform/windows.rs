@@ -6,12 +6,13 @@
 //! Anything parsed from command output is locale-independent: JSON from PowerShell and the
 //! numeric rows of `route print`.
 
-use crate::cidr::{self, Cidr};
+use crate::cidr::{Cidr, Family};
 use crate::config::Config;
 use crate::net::{Installed, Lookup, Net, Plan, Uplink};
 use crate::util;
 use serde::Deserialize;
 use std::collections::HashSet;
+use std::net::IpAddr;
 
 pub struct Windows;
 
@@ -86,37 +87,66 @@ fn mask_len(mask: u32) -> Option<u8> {
     (mask == if ones == 0 { 0 } else { u32::MAX << (32 - ones as u32) }).then_some(ones)
 }
 
-/// Gateway routes from `route print -4`: `dest mask gateway interface metric`.
+/// A gateway route from `route print`.
+#[derive(Debug, PartialEq)]
+pub struct RouteRow {
+    pub prefix: Cidr,
+    pub gateway: String,
+    /// IPv6 rows name the interface by index; IPv4 rows give an address instead, so this is empty there.
+    pub dev: String,
+}
+
+/// IPv4: `dest mask gateway interface-address metric`. IPv6: `if metric dest/len gateway`.
 /// On-link rows have a localized word instead of an address and are skipped.
-pub fn parse_route_print(text: &str) -> Vec<(Cidr, String)> {
+pub fn parse_route_print(text: &str, fam: Family) -> Vec<RouteRow> {
     text.lines()
         .filter_map(|l| {
             let t: Vec<&str> = l.split_whitespace().collect();
-            if t.len() != 5 {
-                return None;
+            match fam {
+                Family::V4 => {
+                    if t.len() != 5 {
+                        return None;
+                    }
+                    let (dest, mask) = (t[0].parse::<std::net::Ipv4Addr>().ok()?, t[1].parse::<std::net::Ipv4Addr>().ok()?);
+                    let gw = t[2].parse::<std::net::Ipv4Addr>().ok()?;
+                    t[3].parse::<std::net::Ipv4Addr>().ok()?;
+                    t[4].parse::<u32>().ok()?;
+                    let mask = u32::from(mask);
+                    let len = mask_len(mask)?;
+                    Some(RouteRow {
+                        prefix: Cidr { fam, addr: (u32::from(dest) & mask) as u128, len },
+                        gateway: gw.to_string(),
+                        dev: String::new(),
+                    })
+                }
+                Family::V6 => {
+                    if t.len() != 4 {
+                        return None;
+                    }
+                    t[0].parse::<u32>().ok()?;
+                    t[1].parse::<u32>().ok()?;
+                    let prefix = Cidr::parse(t[2]).filter(|c| c.fam == fam && t[2].contains('/'))?;
+                    let gw = t[3].parse::<std::net::Ipv6Addr>().ok()?;
+                    Some(RouteRow { prefix, gateway: gw.to_string(), dev: t[0].to_string() })
+                }
             }
-            let (dest, mask, gw) = (cidr::parse_ipv4(t[0])?, cidr::parse_ipv4(t[1])?, cidr::parse_ipv4(t[2])?);
-            cidr::parse_ipv4(t[3])?;
-            t[4].parse::<u32>().ok()?;
-            let len = mask_len(mask)?;
-            Some((Cidr { addr: dest & mask, len }, cidr::fmt_ipv4(gw)))
         })
         .collect()
 }
 
-pub fn installed_from(rows: &[(Cidr, String)], candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Vec<Installed> {
+pub fn installed_from(rows: &[RouteRow], candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Vec<Installed> {
     rows.iter()
-        .filter(|(p, _)| p.len > 0 && candidates.contains(p))
-        .filter_map(|(p, gw)| {
-            let u = ours.iter().find(|u| u.via.as_deref() == Some(gw.as_str()))?;
-            Some(Installed { prefix: *p, via: Some(gw.clone()), dev: u.dev.clone() })
+        .filter(|r| r.prefix.len > 0 && candidates.contains(&r.prefix))
+        .filter_map(|r| {
+            let u = ours.iter().find(|u| u.via.as_deref() == Some(r.gateway.as_str()) && (r.dev.is_empty() || r.dev == u.dev))?;
+            Some(Installed { prefix: r.prefix, via: Some(r.gateway.clone()), dev: u.dev.clone() })
         })
         .collect()
 }
 
 /// A netsh script for `netsh -f`. Removals first, then additions.
-pub fn netsh_script(uplink: &Uplink, plan: &Plan) -> String {
-    let mut s = String::from("interface ipv4\n");
+pub fn netsh_script(fam: Family, uplink: &Uplink, plan: &Plan) -> String {
+    let mut s = String::from(if fam == Family::V6 { "interface ipv6\n" } else { "interface ipv4\n" });
     for r in &plan.remove {
         if let Some(via) = &r.via {
             s.push_str(&format!("delete route prefix={} interface={} nexthop={via} store=active\n", r.prefix, r.dev));
@@ -138,18 +168,23 @@ struct LookupRow {
     physical: bool,
 }
 
-const UPLINK_SCRIPT: &str = r#"
+fn uplink_script(fam: Family) -> String {
+    let (family, prefix, none) = if fam == Family::V6 { ("IPv6", "::/0", "::") } else { ("IPv4", "0.0.0.0/0", "0.0.0.0") };
+    format!(
+        r#"
 $rows = @()
-foreach ($a in @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' })) {
-  $m = (Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).InterfaceMetric
-  foreach ($r in @(Get-NetRoute -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue)) {
-    if ($r.NextHop -ne '0.0.0.0') {
-      $rows += [pscustomobject]@{ ifIndex = [int]$a.ifIndex; alias = [string]$a.Name; via = [string]$r.NextHop; metric = [int]($r.RouteMetric + $m) }
-    }
-  }
-}
+foreach ($a in @(Get-NetAdapter -Physical | Where-Object {{ $_.Status -eq 'Up' }})) {{
+  $m = (Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily {family} -ErrorAction SilentlyContinue).InterfaceMetric
+  foreach ($r in @(Get-NetRoute -InterfaceIndex $a.ifIndex -AddressFamily {family} -DestinationPrefix '{prefix}' -ErrorAction SilentlyContinue)) {{
+    if ($r.NextHop -ne '{none}') {{
+      $rows += [pscustomobject]@{{ ifIndex = [int]$a.ifIndex; alias = [string]$a.Name; via = [string]$r.NextHop; metric = [int]($r.RouteMetric + $m) }}
+    }}
+  }}
+}}
 ConvertTo-Json -InputObject @($rows) -Compress
-"#;
+"#
+    )
+}
 
 impl Net for Windows {
     fn name(&self) -> &'static str {
@@ -164,8 +199,8 @@ impl Net for Windows {
         }
     }
 
-    fn uplink(&self, cfg: &Config) -> Result<Option<Uplink>, String> {
-        let rows: Vec<UplinkRow> = json_rows(&powershell(UPLINK_SCRIPT)?)?;
+    fn uplink(&self, cfg: &Config, fam: Family) -> Result<Option<Uplink>, String> {
+        let rows: Vec<UplinkRow> = json_rows(&powershell(&uplink_script(fam))?)?;
         Ok(pick_uplink(&rows, cfg))
     }
 
@@ -175,44 +210,44 @@ impl Net for Windows {
             .unwrap_or_default()
     }
 
-    fn ensure_rule(&self, _: &Config, _: Option<u32>) -> Result<Option<String>, String> {
+    fn ensure_rule(&self, _: &Config, _: Family, _: Option<IpAddr>) -> Result<Option<String>, String> {
         Ok(None)
     }
 
-    fn rule_present(&self, _: &Config) -> Result<bool, String> {
+    fn rule_present(&self, _: &Config, _: Family) -> Result<bool, String> {
         Ok(true)
     }
 
-    fn installed(&self, _: &Config, candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Result<Vec<Installed>, String> {
-        Ok(installed_from(&parse_route_print(&util::run("route", &["print", "-4"])?), candidates, ours))
+    fn installed(&self, _: &Config, fam: Family, candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Result<Vec<Installed>, String> {
+        let flag = if fam == Family::V6 { "-6" } else { "-4" };
+        Ok(installed_from(&parse_route_print(&util::run("route", &["print", flag])?, fam), candidates, ours))
     }
 
-    fn apply(&self, _: &Config, uplink: &Uplink, plan: &Plan) -> Result<(), String> {
-        let path = std::env::temp_dir().join("runet-direct-routes.netsh");
-        std::fs::write(&path, netsh_script(uplink, plan)).map_err(|e| e.to_string())?;
+    fn apply(&self, _: &Config, fam: Family, uplink: &Uplink, plan: &Plan) -> Result<(), String> {
+        let path = std::env::temp_dir().join(format!("runet-direct-routes-{}.netsh", fam.key()));
+        std::fs::write(&path, netsh_script(fam, uplink, plan)).map_err(|e| e.to_string())?;
         let result = util::run("netsh", &["-f", &path.to_string_lossy()]);
         let _ = std::fs::remove_file(&path);
         result.map(|_| ())
     }
 
-    fn clear(&self, cfg: &Config, candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Result<usize, String> {
-        let found = self.installed(cfg, candidates, ours)?;
+    fn clear(&self, cfg: &Config, fam: Family, candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Result<usize, String> {
+        let found = self.installed(cfg, fam, candidates, ours)?;
         let n = found.len();
         if let Some(u) = ours.first() {
-            self.apply(cfg, u, &Plan { add: Vec::new(), remove: found, keep: 0 })?;
+            self.apply(cfg, fam, u, &Plan { add: Vec::new(), remove: found, keep: 0 })?;
         }
         Ok(n)
     }
 
-    fn lookup(&self, _: &Config, ip: u32) -> Result<Lookup, String> {
+    fn lookup(&self, _: &Config, ip: IpAddr) -> Result<Lookup, String> {
         let script = format!(
-            "$r = Find-NetRoute -RemoteIPAddress '{}' | Where-Object {{ $_.DestinationPrefix }} | Select-Object -First 1; \
+            "$r = Find-NetRoute -RemoteIPAddress '{ip}' | Where-Object {{ $_.DestinationPrefix }} | Select-Object -First 1; \
              $phys = @(Get-NetAdapter -Physical | ForEach-Object {{ $_.ifIndex }}); \
-             ConvertTo-Json -Compress ([pscustomobject]@{{ alias = [string]$r.InterfaceAlias; via = [string]$r.NextHop; physical = ($phys -contains $r.ifIndex) }})",
-            cidr::fmt_ipv4(ip)
+             ConvertTo-Json -Compress ([pscustomobject]@{{ alias = [string]$r.InterfaceAlias; via = [string]$r.NextHop; physical = ($phys -contains $r.ifIndex) }})"
         );
         let row: LookupRow = json_rows(&powershell(&script)?)?.into_iter().next().ok_or("empty route lookup")?;
-        let via = row.via.filter(|v| v != "0.0.0.0" && !v.is_empty());
+        let via = row.via.filter(|v| v != "0.0.0.0" && v != "::" && !v.is_empty());
         Ok(Lookup { dev: row.alias, via, tunnel: !row.physical })
     }
 
@@ -290,22 +325,50 @@ Persistent Routes:\n\
   Network Address          Netmask  Gateway Address  Metric\n\
           0.0.0.0          0.0.0.0      192.168.1.1  Default\n";
 
+    const ROUTE_PRINT6: &str = "IPv6 Route Table\n\
+===========================================================================\n\
+Active Routes:\n\
+ If Metric Network Destination      Gateway\n\
+ 12    281 ::/0                     fe80::1\n\
+  1    331 ::1/128                  On-link\n\
+ 12    281 2a00:1450::/32           fe80::1\n\
+ 12    281 2a02:6b8::/32            fe80::1\n\
+ 12    281 fe80::/64                На канале\n";
+
     #[test]
     fn route_print_rows_are_locale_independent() {
-        let rows = parse_route_print(ROUTE_PRINT);
+        let rows = parse_route_print(ROUTE_PRINT, Family::V4);
         assert_eq!(rows.len(), 4);
-        assert_eq!(rows[2], (c("5.228.0.0/16"), "192.168.1.1".to_string()));
-        assert_eq!(rows[1].0.to_string(), "0.0.0.0/1");
+        assert_eq!((rows[2].prefix, rows[2].gateway.as_str()), (c("5.228.0.0/16"), "192.168.1.1"));
+        assert_eq!(rows[1].prefix.to_string(), "0.0.0.0/1");
+    }
+
+    #[test]
+    fn ipv6_route_print_rows_carry_the_interface_index() {
+        let rows = parse_route_print(ROUTE_PRINT6, Family::V6);
+        assert_eq!(rows.len(), 3);
+        assert_eq!((rows[1].prefix, rows[1].gateway.as_str(), rows[1].dev.as_str()), (c("2a00:1450::/32"), "fe80::1", "12"));
+        assert!(parse_route_print(ROUTE_PRINT6, Family::V4).is_empty());
+        assert!(parse_route_print(ROUTE_PRINT, Family::V6).is_empty());
     }
 
     #[test]
     fn only_routes_through_our_gateway_count_as_ours() {
-        let rows = parse_route_print(ROUTE_PRINT);
+        let rows = parse_route_print(ROUTE_PRINT, Family::V4);
         let cands: HashSet<Cidr> = [c("5.228.0.0/16"), c("213.59.0.0/16"), c("0.0.0.0/0")].into();
         let ours = [Uplink { dev: "12".into(), via: Some("192.168.1.1".into()) }];
         let found = installed_from(&rows, &cands, &ours);
         assert_eq!(found.len(), 2, "the default route must never be treated as ours");
         assert!(found.iter().all(|i| i.dev == "12"));
+
+        let rows6 = parse_route_print(ROUTE_PRINT6, Family::V6);
+        let cands6: HashSet<Cidr> = [c("2a00:1450::/32"), c("2a02:6b8::/32"), c("::/0")].into();
+        assert_eq!(installed_from(&rows6, &cands6, &ours6("12")).len(), 2);
+        assert!(installed_from(&rows6, &cands6, &ours6("7")).is_empty(), "same link-local gateway on another interface is not ours");
+    }
+
+    fn ours6(dev: &str) -> [Uplink; 1] {
+        [Uplink { dev: dev.into(), via: Some("fe80::1".into()) }]
     }
 
     #[test]
@@ -317,11 +380,23 @@ Persistent Routes:\n\
             keep: 0,
         };
         assert_eq!(
-            netsh_script(&up, &plan),
+            netsh_script(Family::V4, &up, &plan),
             "interface ipv4\n\
              delete route prefix=9.0.0.0/8 interface=7 nexthop=10.9.9.9 store=active\n\
              add route prefix=5.228.0.0/16 interface=12 nexthop=192.168.1.1 metric=1 store=active\n"
         );
+        let up6 = Uplink { dev: "12".into(), via: Some("fe80::1".into()) };
+        let plan6 = Plan { add: vec![c("2a00:1450::/32")], remove: vec![], keep: 0 };
+        assert_eq!(
+            netsh_script(Family::V6, &up6, &plan6),
+            "interface ipv6\nadd route prefix=2a00:1450::/32 interface=12 nexthop=fe80::1 metric=1 store=active\n"
+        );
+    }
+
+    #[test]
+    fn the_uplink_script_asks_for_the_right_family() {
+        assert!(uplink_script(Family::V4).contains("-AddressFamily IPv4") && uplink_script(Family::V4).contains("'0.0.0.0/0'"));
+        assert!(uplink_script(Family::V6).contains("-AddressFamily IPv6") && uplink_script(Family::V6).contains("'::/0'"));
     }
 
     #[test]

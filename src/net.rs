@@ -1,10 +1,11 @@
 //! The operating-system boundary. `Net` is everything the engine needs from the OS;
 //! `make_plan` is the pure diff between the wanted and the installed routes.
 
-use crate::cidr::Cidr;
+use crate::cidr::{Cidr, Family};
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 
 /// The physical (non-tunnel) way out: a gateway reachable over a real interface.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,8 +66,8 @@ pub trait Net {
     /// `Err` with a human message when not running with the rights to change routes.
     fn require_admin(&self) -> Result<(), String>;
 
-    /// Best physical gateway, or `None` when there is none right now.
-    fn uplink(&self, cfg: &Config) -> Result<Option<Uplink>, String>;
+    /// Best physical gateway for the family, or `None` when there is none right now.
+    fn uplink(&self, cfg: &Config, fam: Family) -> Result<Option<Uplink>, String>;
 
     /// Names of tunnel interfaces that currently exist (informational).
     fn tunnels(&self) -> Vec<String>;
@@ -75,21 +76,21 @@ pub trait Net {
     /// that must be routed directly; if it still leaves through a tunnel because another rule is
     /// evaluated first, our rule is moved above that rule. Returns a description of what was changed.
     /// Other systems have no rule and always return `Ok(None)`.
-    fn ensure_rule(&self, cfg: &Config, probe: Option<u32>) -> Result<Option<String>, String>;
+    fn ensure_rule(&self, cfg: &Config, fam: Family, probe: Option<IpAddr>) -> Result<Option<String>, String>;
 
-    fn rule_present(&self, cfg: &Config) -> Result<bool, String>;
+    fn rule_present(&self, cfg: &Config, fam: Family) -> Result<bool, String>;
 
     /// Routes of ours currently installed. Linux: the whole private table. Elsewhere: routes in
     /// the shared table for `candidates` whose next hop is one of `ours`.
-    fn installed(&self, cfg: &Config, candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Result<Vec<Installed>, String>;
+    fn installed(&self, cfg: &Config, fam: Family, candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Result<Vec<Installed>, String>;
 
-    fn apply(&self, cfg: &Config, uplink: &Uplink, plan: &Plan) -> Result<(), String>;
+    fn apply(&self, cfg: &Config, fam: Family, uplink: &Uplink, plan: &Plan) -> Result<(), String>;
 
-    /// Remove everything we installed (routes and rule). Returns the number of routes removed.
-    fn clear(&self, cfg: &Config, candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Result<usize, String>;
+    /// Remove everything we installed for the family (routes and rule). Returns the number of routes removed.
+    fn clear(&self, cfg: &Config, fam: Family, candidates: &HashSet<Cidr>, ours: &[Uplink]) -> Result<usize, String>;
 
     /// Where would traffic to `ip` leave the machine?
-    fn lookup(&self, cfg: &Config, ip: u32) -> Result<Lookup, String>;
+    fn lookup(&self, cfg: &Config, ip: IpAddr) -> Result<Lookup, String>;
 
     /// Long-running command whose output lines signal network changes, if the OS has one.
     fn watch_command(&self) -> Option<Vec<String>>;

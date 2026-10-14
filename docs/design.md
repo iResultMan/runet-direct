@@ -7,8 +7,8 @@ scripts fought over the same routing table.
 
 Make traffic to Russian address blocks leave through the physical connection, whatever VPN is active, and keep it
 that way without anyone watching. It deliberately does nothing else: no per-application rules, no DNS handling, no
-tethering/multi-uplink logic. Anything that must run when the network changes can be attached with
-`[daemon].hook`.
+tethering/multi-uplink logic. Programs that need to react to network changes (for example a gateway or
+channel manager) are separate projects: they watch the same kernel events themselves.
 
 ## Data flow
 
@@ -61,9 +61,19 @@ last-resort name hint for virtual links.
 8. **Temporary entries expire by themselves.** Expiry is enforced by the daemon (it wakes at the exact moment), not
    by the caller, so a crashed controller cannot leave a forgotten exclusion behind.
 
+## IPv4 and IPv6
+
+Both families go through the same engine; everything is keyed by family: separate range sets, separate uplinks
+(an IPv6 gateway is usually a link-local `fe80::` address), separate rules (`ip -6 rule`), separate ownership in
+`state.json`. Each family has an `enabled` switch. A disabled family is not managed at all; routes installed for it
+earlier are removed once. A machine without IPv6 is not an error: with no IPv6 uplink, the family is skipped and no
+rule is created for it.
+
+RIPE writes the size of an IPv4 block as an address count and the size of an IPv6 block as a prefix length; the parser
+handles both. Thresholds against truncated downloads apply per family (`min_prefixes` for IPv4, a tenth of it for IPv6).
+
 ## Known limits
 
-- IPv4 only.
 - A firewall-based VPN kill switch blocks the direct path by design.
 - The very first download needs working DNS and a route to RIPE; later runs use the cached list.
 - Domains in `manual.list` are resolved through the system resolver, which under a VPN may be the VPN's resolver
@@ -74,5 +84,6 @@ last-resort name hint for virtual links.
 ## Migrating from hand-written scripts
 
 Stop whatever else writes the same table or rule (units, NetworkManager dispatcher hooks, cron jobs) before
-installing. Two writers to one table produce flapping routes. If an old script still needs to run on network
-events, point `[daemon].hook` at it.
+installing. Two writers to one table produce flapping routes. Anything else that must react to network events
+(for example per-interface source rules) should keep its own trigger and use a rule priority with a smaller number
+than this program's, so that it is evaluated first.

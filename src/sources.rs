@@ -1,22 +1,25 @@
 //! Where the list of direct destinations comes from: the RIPE delegation file for a
 //! country and the hand-maintained `manual.list`.
 
-use crate::cidr::{self, Cidr, Range};
+use crate::cidr::{self, Cidr, Family, Range};
 use std::io::{self, BufRead};
+use std::net::{IpAddr, Ipv4Addr};
 
 // ---------------------------------------------------------------------------
 // RIPE "delegated-extended" statistics (RIR Statistics Exchange Format).
 //
 //   registry|cc|type|start|value|date|status[|opaque-id]
 //   ripencc|RU|ipv4|213.59.0.0|65536|20090310|allocated|...
+//   ripencc|RU|ipv6|2a00:1450::|32|20090310|allocated|...
 //
-// For ipv4 `value` is the NUMBER OF ADDRESSES in the block, not a prefix length.
+// For ipv4 `value` is the NUMBER OF ADDRESSES in the block; for ipv6 it is the PREFIX LENGTH.
 // The first line is a version header, summary lines have `*` as country.
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, PartialEq)]
 pub struct RipeList {
-    pub ranges: Vec<Range>,
+    pub v4: Vec<Range>,
+    pub v6: Vec<Range>,
     /// Snapshot date (`YYYY-MM-DD`) taken from the file header.
     pub snapshot: Option<String>,
 }
@@ -39,7 +42,7 @@ pub fn parse_ripe<R: BufRead>(reader: R, country: &str, statuses: &[&str]) -> io
                 .map(|d| format!("{}-{}-{}", &d[..4], &d[4..6], &d[6..8]));
             continue;
         }
-        if f.len() < 6 || f[1] != country || f[2] != "ipv4" || f[5] == "summary" {
+        if f.len() < 6 || f[1] != country || f[5] == "summary" || !(f[2] == "ipv4" || f[2] == "ipv6") {
             continue;
         }
         if let Some(status) = f.get(6) {
@@ -47,11 +50,22 @@ pub fn parse_ripe<R: BufRead>(reader: R, country: &str, statuses: &[&str]) -> io
                 continue;
             }
         }
-        let (Some(start), Ok(count)) = (cidr::parse_ipv4(f[3]), f[4].parse::<u64>()) else { continue };
-        if count == 0 || start as u64 + count - 1 > u32::MAX as u64 {
-            continue;
+        let Ok(value) = f[4].parse::<u64>() else { continue };
+        if f[2] == "ipv4" {
+            let Ok(start) = f[3].parse::<Ipv4Addr>() else { continue };
+            let start = u32::from(start) as u128;
+            if value == 0 || start + value as u128 - 1 > u32::MAX as u128 {
+                continue;
+            }
+            out.v4.push((start, start + value as u128 - 1));
+        } else {
+            let Ok(start) = f[3].parse::<std::net::Ipv6Addr>() else { continue };
+            if value == 0 || value > 128 {
+                continue;
+            }
+            let block = Cidr { fam: Family::V6, addr: u128::from(start), len: value as u8 };
+            out.v6.push(block.range());
         }
-        out.ranges.push((start, (start as u64 + count - 1) as u32));
     }
     Ok(out)
 }
@@ -226,11 +240,17 @@ pub fn parse_target_list(text: &str) -> Result<Vec<Target>, String> {
     Ok(out)
 }
 
-/// Final route set: (country ranges ∪ manual direct) − manual vpn, fully aggregated.
-pub fn compose(country: Vec<Range>, direct: Vec<Range>, vpn: Vec<Range>) -> Vec<Cidr> {
+/// Final route set for one family: (country ranges ∪ manual direct) − manual vpn, fully aggregated.
+pub fn compose(fam: Family, country: Vec<Range>, direct: Vec<Range>, vpn: Vec<Range>) -> Vec<Cidr> {
     let mut all = country;
     all.extend(direct);
-    cidr::aggregate(cidr::subtract(all, vpn))
+    cidr::aggregate(fam, cidr::subtract(all, vpn))
+}
+
+/// Addresses of `ip` as a range for set arithmetic.
+pub fn host_range(ip: &IpAddr) -> Range {
+    let a = cidr::ip_to_u128(ip);
+    (a, a)
 }
 
 #[cfg(test)]
@@ -251,27 +271,32 @@ mod tests {
              ripencc|RU|ipv4|5.228.0.0|65536|20110101|assigned|d4e5f6\n\
              ripencc|DE|ipv4|85.214.0.0|65536|20050101|allocated|zzzz\n\
              ripencc|RU|ipv6|2a02:6b8::|32|20090310|allocated|a1b2c3\n\
+             ripencc|DE|ipv6|2a01:238::|32|20090310|allocated|zzzz\n\
              ripencc|RU|asn|12345|1|20090310|allocated\n\
              ripencc|RU|ipv4|37.9.96.0|8192|20100101|available|aaaaaa\n\
              ripencc|*|ipv4|*|112500224|summary\n\
              garbage line\n\
              \n",
         );
-        let blocks: Vec<String> = cidr::aggregate(r.ranges).iter().map(|c| c.to_string()).collect();
+        let blocks: Vec<String> = cidr::aggregate(Family::V4, r.v4).iter().map(|c| c.to_string()).collect();
         assert_eq!(blocks, ["5.228.0.0/16", "213.59.0.0/16"]);
+        let v6: Vec<String> = cidr::aggregate(Family::V6, r.v6).iter().map(|c| c.to_string()).collect();
+        assert_eq!(v6, ["2a02:6b8::/32"], "the ipv6 value is a prefix length, not an address count");
         assert_eq!(r.snapshot.as_deref(), Some("2026-10-01"));
     }
 
     #[test]
     fn ripe_status_filter_is_configurable() {
         let l = parse_ripe(Cursor::new("ripencc|RU|ipv4|37.9.96.0|8192|20100101|available|aaaaaa"), "RU", &["available"]).unwrap();
-        assert_eq!(cidr::aggregate(l.ranges)[0].to_string(), "37.9.96.0/19");
+        assert_eq!(cidr::aggregate(Family::V4, l.v4)[0].to_string(), "37.9.96.0/19");
     }
 
     #[test]
     fn ripe_ignores_blocks_that_overflow_the_address_space() {
-        assert!(ripe("ripencc|RU|ipv4|255.255.255.0|512|20100101|allocated").ranges.is_empty());
-        assert!(ripe("ripencc|RU|ipv4|10.0.0.0|0|20100101|allocated").ranges.is_empty());
+        assert!(ripe("ripencc|RU|ipv4|255.255.255.0|512|20100101|allocated").v4.is_empty());
+        assert!(ripe("ripencc|RU|ipv4|10.0.0.0|0|20100101|allocated").v4.is_empty());
+        assert!(ripe("ripencc|RU|ipv6|2a00::|0|20100101|allocated").v6.is_empty());
+        assert!(ripe("ripencc|RU|ipv6|2a00::|129|20100101|allocated").v6.is_empty());
     }
 
     #[test]
@@ -360,10 +385,28 @@ mod tests {
         let country = vec![Cidr::parse("5.228.0.0/16").unwrap().range()];
         let direct = vec![Cidr::parse("1.1.1.1").unwrap().range()];
         let vpn = vec![Cidr::parse("5.228.1.0/24").unwrap().range(), Cidr::parse("1.1.1.1").unwrap().range()];
-        let blocks = compose(country, direct, vpn);
-        let ip = |s| cidr::parse_ipv4(s).unwrap();
-        assert!(!blocks.iter().any(|b| b.contains(ip("5.228.1.9")) || b.contains(ip("1.1.1.1"))));
-        assert!(blocks.iter().any(|b| b.contains(ip("5.228.0.255"))));
-        assert!(blocks.iter().any(|b| b.contains(ip("5.228.2.0"))));
+        let blocks = compose(Family::V4, country, direct, vpn);
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert!(!blocks.iter().any(|b| b.contains(&ip("5.228.1.9")) || b.contains(&ip("1.1.1.1"))));
+        assert!(blocks.iter().any(|b| b.contains(&ip("5.228.0.255"))));
+        assert!(blocks.iter().any(|b| b.contains(&ip("5.228.2.0"))));
+    }
+
+    #[test]
+    fn the_same_works_for_v6() {
+        let country = vec![Cidr::parse("2a02:6b8::/32").unwrap().range()];
+        let vpn = vec![Cidr::parse("2a02:6b8:1::/48").unwrap().range()];
+        let blocks = compose(Family::V6, country, vec![], vpn);
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert!(!blocks.iter().any(|b| b.contains(&ip("2a02:6b8:1::5"))));
+        assert!(blocks.iter().any(|b| b.contains(&ip("2a02:6b8:2::5"))));
+    }
+
+    #[test]
+    fn ipv6_targets_are_accepted_in_the_manual_list() {
+        let (e, errs) = parse_manual("vpn 2001:db8::/32\n2a00:1450::1\nvpn ::/0\n");
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(e.len(), 3);
+        assert_eq!(e[2].target, Target::Net(Cidr::parse("::/0").unwrap()));
     }
 }

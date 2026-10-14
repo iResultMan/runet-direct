@@ -9,7 +9,7 @@ mail, many of which refuse foreign addresses or are simply slower that way. `run
 service that sends traffic for Russian address blocks straight out through your normal connection while everything
 else keeps using the VPN. It works with any VPN, because it never looks at which one you use.
 
-- One static binary, no runtime. Linux, macOS and Windows.
+- One static binary, no runtime. Linux, macOS and Windows. IPv4 and IPv6, each switchable on its own.
 - Installs itself as a native background service and repairs its own routes when the network changes.
 - Controlled from the command line, with JSON output and stable exit codes, so other programs can drive it.
 
@@ -43,11 +43,12 @@ Re-running `install` upgrades in place and keeps your settings.
 
 ```
 Service:  running (systemd), starts at boot
-Uplink:   192.168.1.1 via enp3s0f0
 Tunnels:  tun0 (left alone)
-Routes:   8662 of 8662 in place
-Rule:     present
-Country:  8662 blocks, RIPE snapshot 2026-10-13, fetched 2 days ago
+IPv4 uplink: 192.168.1.1 via enp3s0f0
+IPv4 routes: 8662 of 8662 in place
+IPv6 uplink: fe80::1 via enp3s0f0
+IPv6 routes: 1943 of 1943 in place
+Country:  8662 IPv4 + 1943 IPv6 blocks, RIPE snapshot 2026-10-13, fetched 2 days ago
 Health:   OK
 ```
 
@@ -76,7 +77,8 @@ Everything except `status`, `check`, `list` and `config` needs root / Administra
 can hand over a whole table. `add` and `exclude` accept `--for 30m` / `--until 2026-10-14T18:00:00Z`: the entry
 then expires by itself, even if the program that created it has crashed, and the service wakes up at that moment.
 `status` shows an active pause.
-| `config [--path]` | Show the effective settings and where the files live. |
+| `config` / `config path` | Show the effective settings / where the files live. |
+| `config get KEY` / `config set KEY VALUE` | Read or change one setting such as `ipv6.enabled`; comments in the file are kept, the change is validated and applied at once. |
 | `run [--log-file F]` | Run the daemon in the foreground (this is what the service executes). |
 
 Other programs should rely on `--json` output and exit codes, not on the human-readable text.
@@ -99,9 +101,13 @@ direct bank.example.com   # domains are re-resolved every few hours
 vpn    198.51.100.7       # never direct, even though a Russian block contains it
 ```
 
-`config.toml` options: `[routing]` `table`, `priority`, `interface`, `ignore_interfaces`; `[ru]` `enabled`, `country`,
-`source_url`, `refresh_days`, `min_prefixes`; `[daemon]` `interval_seconds`, `hook` (a command run after every
-network event or route change, for gluing in your own scripts).
+`config.toml` options: `[ipv4]` / `[ipv6]` `enabled`; `[routing]` `table`, `priority`, `interface`,
+`ignore_interfaces`; `[ru]` `enabled`, `country`, `source_url`, `refresh_days`, `min_prefixes`; `[daemon]`
+`interval_seconds`.
+
+**IPv4 and IPv6 are independent.** `runet-direct config set ipv6.enabled false` leaves IPv6 completely alone (and
+removes any IPv6 routes this program added earlier); the same switch exists for `ipv4`. A machine that has no
+IPv6 connection at all simply has nothing to do for it and stays healthy.
 
 ## Does it really work with my VPN?
 
@@ -115,8 +121,7 @@ It does not need to know your VPN. How, in plain words:
   specific than the VPN's catch-all routes, so they win by themselves.
 - The physical connection is picked by what the interface is (real hardware vs. virtual), never by a VPN name.
 
-Caveats: a VPN "kill switch" implemented as a firewall blocks direct traffic by design, so it defeats this tool;
-IPv6 is not handled.
+Caveat: a VPN "kill switch" implemented as a firewall blocks direct traffic by design, so it defeats this tool.
 
 ## Requirements and limits
 

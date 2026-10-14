@@ -17,8 +17,10 @@ pub struct State {
     pub resolved: BTreeMap<String, Resolved>,
     /// Prefixes this program has put into the routing table (macOS/Windows have no private table).
     pub installed: Vec<String>,
-    /// Uplink used for the routes above, e.g. `192.168.1.1@en0`.
-    pub installed_uplink: Option<crate::net::Uplink>,
+    /// Uplink used for the routes above, per family (`ipv4`, `ipv6`).
+    pub uplinks: BTreeMap<String, crate::net::Uplink>,
+    /// Families this program has installed routes for; a family that is now disabled gets cleaned up.
+    pub active: Vec<String>,
     pub last_apply: Option<Applied>,
     pub last_error: Option<String>,
 }
@@ -27,7 +29,10 @@ pub struct State {
 pub struct RuMeta {
     pub fetched_at: u64,
     pub snapshot: Option<String>,
+    /// IPv4 blocks.
     pub count: usize,
+    #[serde(default)]
+    pub count_v6: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

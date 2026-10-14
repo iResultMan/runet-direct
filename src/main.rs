@@ -101,16 +101,26 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Show the effective configuration (or only its location with --path)
+    /// Show or change settings: `config`, `config path`, `config get ipv6.enabled`, `config set ipv6.enabled false`
     Config {
-        #[arg(long)]
-        path: bool,
+        #[command(subcommand)]
+        action: Option<ConfigCmd>,
     },
     /// Run the daemon in the foreground (this is what the service executes)
     Run {
         #[arg(long)]
         log_file: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// Print where the configuration files live
+    Path,
+    /// Print one setting, e.g. `ipv6.enabled`
+    Get { key: String },
+    /// Change one setting (comments in the file are kept) and apply it right away
+    Set { key: String, value: String },
 }
 
 #[derive(clap::Args)]
@@ -177,6 +187,11 @@ impl Targets {
     }
 }
 
+/// `0.0.0.0/0` and `::/0`: pausing covers both families.
+fn everything() -> [Target; 2] {
+    [Target::Net(cidr::Cidr { fam: cidr::Family::V4, addr: 0, len: 0 }), Target::Net(cidr::Cidr { fam: cidr::Family::V6, addr: 0, len: 0 })]
+}
+
 fn die(msg: impl AsRef<str>) -> ! {
     eprintln!("error: {}", msg.as_ref());
     exit(2)
@@ -224,12 +239,10 @@ fn main() {
         Cmd::Add { targets, when } => edit_manual(&paths, net.as_ref(), &targets.resolve(), Some(Verdict::Direct), when.until()),
         Cmd::Exclude { targets, when } => edit_manual(&paths, net.as_ref(), &targets.resolve(), Some(Verdict::Vpn), when.until()),
         Cmd::Remove { targets } => edit_manual(&paths, net.as_ref(), &targets.resolve(), None, None),
-        Cmd::Pause { when } => {
-            edit_manual(&paths, net.as_ref(), &[Target::Net(cidr::Cidr { addr: 0, len: 0 })], Some(Verdict::Vpn), when.until())
-        }
-        Cmd::Resume => edit_manual(&paths, net.as_ref(), &[Target::Net(cidr::Cidr { addr: 0, len: 0 })], None, None),
+        Cmd::Pause { when } => edit_manual(&paths, net.as_ref(), &everything(), Some(Verdict::Vpn), when.until()),
+        Cmd::Resume => edit_manual(&paths, net.as_ref(), &everything(), None, None),
         Cmd::List { json } => list(&paths, json),
-        Cmd::Config { path } => show_config(&paths, path),
+        Cmd::Config { action } => config_cmd(&paths, net.as_ref(), action),
         Cmd::Run { log_file } => {
             if let Some(f) = log_file {
                 log::init_file(&f);
@@ -294,7 +307,7 @@ fn install(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, no_start: b
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(150) {
         let s = State::load(paths);
-        if s.ru.is_some() && s.installed_uplink.is_some() {
+        if s.ru.is_some() && !s.uplinks.is_empty() {
             let n = s.last_apply.map(|a| a.total).unwrap_or(0);
             println!("done: {n} routes installed. Check anytime with `runet-direct status`.");
             return;
@@ -376,30 +389,39 @@ fn status(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, as_json: boo
             None => println!("PAUSED:   everything goes through the VPN until `runet-direct resume`"),
         }
     }
-    println!("Uplink:   {}", h.uplink.as_deref().unwrap_or("none found"));
     if !h.tunnels.is_empty() {
         println!("Tunnels:  {} (left alone)", h.tunnels.join(", "));
     }
-    println!(
-        "Routes:   {} of {} in place{}",
-        h.installed,
-        h.wanted,
-        yes(h.missing + h.stale > 0, &format!(" ({} missing, {} stale)", h.missing, h.stale), "")
-    );
-    if net.name() == "linux" {
-        println!("Rule:     {}", yes(h.rule_present, "present", "MISSING"));
+    for f in &h.families {
+        let up = f.uplink.as_deref().unwrap_or(if f.family == "IPv6" { "none (no IPv6 here)" } else { "none found" });
+        println!("{} uplink: {up}", f.family);
+        if f.uplink.is_some() {
+            println!(
+                "{} routes: {} of {} in place{}{}",
+                f.family,
+                f.installed,
+                f.wanted,
+                yes(f.missing + f.stale > 0, &format!(" ({} missing, {} stale)", f.missing, f.stale), ""),
+                if net.name() == "linux" && !f.rule_present { "   [RULE MISSING]" } else { "" }
+            );
+        }
     }
     match (h.country_blocks, &h.country_snapshot, h.country_age_days) {
-        (Some(n), snap, age) => {
-            println!("Country:  {n} blocks, RIPE snapshot {}, fetched {} days ago", snap.as_deref().unwrap_or("unknown"), age.unwrap_or(0))
-        }
+        (Some(n), snap, age) => println!(
+            "Country:  {n} IPv4 + {} IPv6 blocks, RIPE snapshot {}, fetched {} days ago",
+            h.country_blocks_v6.unwrap_or(0),
+            snap.as_deref().unwrap_or("unknown"),
+            age.unwrap_or(0)
+        ),
         _ => println!("Country:  not downloaded yet"),
     }
     if let Some(a) = &state.last_apply {
         println!("Last change: {} (+{} -{})", log::iso(a.at), a.added, a.removed);
     }
-    for s in &h.samples {
-        println!("  probe {:>15} -> {}{}", s.ip, s.dev, if s.tunnel { "  [TUNNEL]" } else { "" });
+    for f in &h.families {
+        for s in &f.samples {
+            println!("  probe {:>25} -> {}{}", s.ip, s.dev, if s.tunnel { "  [TUNNEL]" } else { "" });
+        }
     }
     if h.healthy {
         println!("Health:   OK");
@@ -419,7 +441,9 @@ fn check(paths: &Paths, net: &dyn Net, target: Option<String>, as_json: bool) {
         if as_json {
             print_json(&h);
         } else if h.healthy {
-            println!("OK: {} routes in place, {} probes leave through the physical uplink", h.installed, h.samples.len());
+            let routes: usize = h.families.iter().map(|f| f.installed).sum();
+            let probes: usize = h.families.iter().map(|f| f.samples.len()).sum();
+            println!("OK: {routes} routes in place, {probes} probes leave through the physical uplink");
         } else {
             for p in &h.problems {
                 println!("problem: {p}");
@@ -427,16 +451,13 @@ fn check(paths: &Paths, net: &dyn Net, target: Option<String>, as_json: bool) {
         }
         exit(if h.healthy { 0 } else { 1 });
     };
-    let ips: Vec<u32> = match sources::parse_target(&target).unwrap_or_else(|e| die(e)) {
-        Target::Net(c) => vec![if c.len >= 31 { c.first() } else { c.first() + 1 }],
+    let ips: Vec<std::net::IpAddr> = match sources::parse_target(&target).unwrap_or_else(|e| die(e)) {
+        Target::Net(c) => vec![c.probe()],
         Target::Host(h) => {
             use std::net::ToSocketAddrs;
-            let v: Vec<u32> = (h.as_str(), 0u16)
-                .to_socket_addrs()
-                .map(|it| it.filter_map(|a| if let std::net::SocketAddr::V4(v) = a { Some(u32::from(*v.ip())) } else { None }).collect())
-                .unwrap_or_default();
+            let v: Vec<std::net::IpAddr> = (h.as_str(), 0u16).to_socket_addrs().map(|it| it.map(|a| a.ip()).collect()).unwrap_or_default();
             if v.is_empty() {
-                die(format!("{h} has no IPv4 address"));
+                die(format!("{h} has no address"));
             }
             v
         }
@@ -448,9 +469,9 @@ fn check(paths: &Paths, net: &dyn Net, target: Option<String>, as_json: bool) {
             Ok(l) => {
                 leaks |= l.tunnel;
                 if !as_json {
-                    println!("{:>15} -> {}{}", cidr::fmt_ipv4(ip), if l.tunnel { "TUNNEL " } else { "direct via " }, l.dev);
+                    println!("{:>25} -> {}{}", ip, if l.tunnel { "TUNNEL " } else { "direct via " }, l.dev);
                 }
-                out.push(json!({"ip": cidr::fmt_ipv4(ip), "interface": l.dev, "via": l.via, "tunnel": l.tunnel}));
+                out.push(json!({"ip": ip.to_string(), "interface": l.dev, "via": l.via, "tunnel": l.tunnel}));
             }
             Err(e) => die(e),
         }
@@ -471,19 +492,21 @@ fn apply(paths: &Paths, net: &dyn Net, force_refresh: bool) {
     let _ = paths.write_defaults();
     match engine::cycle(paths, &cfg, net, &engine::CycleOpts { force_refresh }) {
         Ok(c) => {
-            let r = c.report;
-            if let Some(s) = &r.skipped {
-                println!("{s}");
+            for r in &c.report.families {
+                if let Some(msg) = &r.skipped {
+                    println!("{}: {msg}", r.family);
+                }
+                println!(
+                    "{}: uplink {}; routes wanted {}, added {}, removed {}, unchanged {}{}",
+                    r.family,
+                    r.uplink.as_deref().unwrap_or("none"),
+                    r.wanted,
+                    r.added,
+                    r.removed,
+                    r.kept,
+                    r.rule_change.as_deref().map(|c| format!("; {c}")).unwrap_or_default()
+                );
             }
-            println!(
-                "uplink: {}; routes wanted {}, added {}, removed {}, unchanged {}{}",
-                r.uplink.as_deref().unwrap_or("none"),
-                r.wanted,
-                r.added,
-                r.removed,
-                r.kept,
-                r.rule_change.as_deref().map(|c| format!("; {c}")).unwrap_or_default()
-            );
             for w in c.desired.warnings {
                 println!("warning: {w}");
             }
@@ -553,14 +576,46 @@ fn list(paths: &Paths, as_json: bool) {
     }
 }
 
-fn show_config(paths: &Paths, only_path: bool) {
-    if only_path {
-        println!("{}", paths.config_file().display());
-        return;
+fn config_cmd(paths: &Paths, net: &dyn Net, action: Option<ConfigCmd>) {
+    match action {
+        None => {
+            println!("# file:   {}", paths.config_file().display());
+            println!("# manual: {}", paths.manual_file().display());
+            println!("# data:   {}", paths.state_dir.display());
+            println!("# log:    {}", paths.log_file.display());
+            println!("{}", toml::to_string_pretty(&load_config(paths)).expect("config serializes"));
+        }
+        Some(ConfigCmd::Path) => println!("{}", paths.config_file().display()),
+        Some(ConfigCmd::Get { key }) => {
+            let cfg = toml::Value::try_from(load_config(paths)).expect("config serializes");
+            let (section, name) = key.split_once('.').unwrap_or_else(|| die("use section.key, e.g. ipv6.enabled"));
+            match cfg.get(section).and_then(|s| s.get(name)) {
+                Some(toml::Value::String(s)) => println!("{s}"),
+                Some(v) => println!("{v}"),
+                None => die(format!("no such setting: {key}")),
+            }
+        }
+        Some(ConfigCmd::Set { key, value }) => {
+            need_admin(net);
+            let (section, name) = key.split_once('.').unwrap_or_else(|| die("use section.key, e.g. ipv6.enabled"));
+            let _ = paths.write_defaults();
+            let text = std::fs::read_to_string(paths.config_file()).unwrap_or_else(|_| config::DEFAULT_CONFIG.to_string());
+            let mut doc: toml_edit::DocumentMut = text.parse().unwrap_or_else(|e| die(format!("{}: {e}", paths.config_file().display())));
+            // `true`, `900`, `["a"]` are taken as TOML; anything else as a plain string.
+            let parsed = value.parse::<toml_edit::Value>().unwrap_or_else(|_| toml_edit::Value::from(value.as_str()));
+            let table = doc
+                .entry(section)
+                .or_insert_with(toml_edit::table)
+                .as_table_mut()
+                .unwrap_or_else(|| die(format!("`{section}` is not a section")));
+            table.insert(name, toml_edit::Item::Value(parsed));
+            let new_text = doc.to_string();
+            if let Err(e) = toml::from_str::<Config>(&new_text) {
+                die(format!("refused, the result would be invalid: {e}"));
+            }
+            std::fs::write(paths.config_file(), new_text).unwrap_or_else(|e| die(format!("{}: {e}", paths.config_file().display())));
+            println!("{key} = {value}");
+            apply(paths, net, false);
+        }
     }
-    println!("# file:   {}", paths.config_file().display());
-    println!("# manual: {}", paths.manual_file().display());
-    println!("# data:   {}", paths.state_dir.display());
-    println!("# log:    {}", paths.log_file.display());
-    println!("{}", toml::to_string_pretty(&load_config(paths)).expect("config serializes"));
 }

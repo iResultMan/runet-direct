@@ -1,5 +1,6 @@
 //! Configuration file and well-known paths.
 
+use crate::cidr::Family;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,9 +8,38 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    pub ipv4: Stack,
+    pub ipv6: Stack,
     pub routing: Routing,
     pub ru: Ru,
     pub daemon: Daemon,
+}
+
+/// Per-family switch. A disabled family is not managed at all, and routes this program
+/// installed for it earlier are removed.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Stack {
+    pub enabled: bool,
+}
+
+impl Default for Stack {
+    fn default() -> Self {
+        Stack { enabled: true }
+    }
+}
+
+impl Config {
+    pub fn enabled(&self, fam: Family) -> bool {
+        match fam {
+            Family::V4 => self.ipv4.enabled,
+            Family::V6 => self.ipv6.enabled,
+        }
+    }
+
+    pub fn families(&self) -> Vec<Family> {
+        Family::ALL.into_iter().filter(|f| self.enabled(*f)).collect()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -34,7 +64,8 @@ pub struct Ru {
     pub country: String,
     pub source_url: String,
     pub refresh_days: u64,
-    /// A downloaded list smaller than this is rejected as truncated.
+    /// A downloaded list with fewer IPv4 blocks than this is rejected as truncated
+    /// (for IPv6 a tenth of it is required).
     pub min_prefixes: usize,
 }
 
@@ -43,8 +74,6 @@ pub struct Ru {
 pub struct Daemon {
     /// Safety-net check period; network events trigger an immediate check on Linux/macOS.
     pub interval_seconds: u64,
-    /// Shell command run after every network event or route change (empty = none).
-    pub hook: String,
 }
 
 impl Default for Routing {
@@ -67,7 +96,7 @@ impl Default for Ru {
 
 impl Default for Daemon {
     fn default() -> Self {
-        Daemon { interval_seconds: 30, hook: String::new() }
+        Daemon { interval_seconds: 30 }
     }
 }
 
@@ -82,11 +111,20 @@ impl Config {
 }
 
 pub const DEFAULT_CONFIG: &str = r#"# runet-direct configuration. Every value shown is the default; delete what you
-# do not need to change. Edit, then `runet-direct restart` (or wait one interval).
+# do not need to change. Edit, then `runet-direct restart` (or use `runet-direct config set`).
+
+# Manage each address family separately. A disabled family is left completely alone
+# (and routes added for it earlier are removed).
+[ipv4]
+enabled = true
+
+[ipv6]
+enabled = true
 
 [routing]
 # Linux only: routing table and ip-rule priority used for the direct routes.
-# The priority must be a smaller number than the rules a VPN client installs.
+# The priority must be a smaller number than the rules a VPN client installs
+# (it is raised automatically if a VPN rule turns out to be in front of it).
 table = 900
 priority = 2500
 # Force the uplink instead of auto-detecting it (Linux/macOS: interface name,
@@ -101,18 +139,18 @@ enabled = true
 country = "RU"
 source_url = "https://ftp.ripe.net/pub/stats/ripencc/delegated-ripencc-extended-latest"
 refresh_days = 30
+# A downloaded list with fewer IPv4 blocks than this is rejected as truncated
+# (for IPv6 a tenth of it is required).
 min_prefixes = 1000
 
 [daemon]
+# Safety-net check period; network events trigger an immediate check on Linux/macOS.
 interval_seconds = 30
-# Shell command run after every network event or route change, e.g. a script
-# that fixes other routes. Empty = none.
-hook = ""
 "#;
 
 pub const DEFAULT_MANUAL: &str = "# Extra destinations, one per line:\n\
-#   direct <ip | a.b.c.d/n | domain>   always bypass the VPN\n\
-#   vpn    <ip | a.b.c.d/n | domain>   never bypass the VPN (wins over everything else)\n\
+#   direct <ip | cidr | domain>   always bypass the VPN (IPv4 and IPv6)\n\
+#   vpn    <ip | cidr | domain>   never bypass the VPN (wins over everything else)\n\
 # A line without a keyword means `direct`. Domains are resolved every few hours.\n\
 # Manage this file with `runet-direct add | exclude | remove`.\n";
 

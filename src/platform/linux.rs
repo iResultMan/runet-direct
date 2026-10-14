@@ -4,12 +4,13 @@
 //! destination found in the table leaves through the physical gateway, and every other
 //! destination falls through to whatever the VPN set up. Nothing here names a VPN.
 
-use crate::cidr::Cidr;
+use crate::cidr::{Cidr, Family};
 use crate::config::Config;
 use crate::net::{Installed, Lookup, Net, Plan, Uplink};
 use crate::util;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::net::IpAddr;
 use std::path::Path;
 
 pub struct Linux;
@@ -264,13 +265,14 @@ impl Net for Linux {
         }
     }
 
-    fn uplink(&self, cfg: &Config) -> Result<Option<Uplink>, String> {
-        let main = parse_default_routes(&ip(&["-4", "route", "show", "table", "main"])?);
+    fn uplink(&self, cfg: &Config, fam: Family) -> Result<Option<Uplink>, String> {
+        let f = fam.ip_flag();
+        let main = parse_default_routes(&ip(&[f, "route", "show", "table", "main"])?);
         if let Some(u) = pick_uplink(&main, &is_tunnel, cfg) {
             return Ok(Some(u));
         }
         // A VPN may have removed the original default from main; look in the other tables.
-        let all = parse_default_routes(&ip(&["-4", "route", "show", "table", "all", "default"])?);
+        let all = parse_default_routes(&ip(&[f, "route", "show", "table", "all", "default"])?);
         Ok(pick_uplink(&all, &is_tunnel, cfg))
     }
 
@@ -282,34 +284,36 @@ impl Net for Linux {
         v
     }
 
-    fn rule_present(&self, cfg: &Config) -> Result<bool, String> {
-        let rules = parse_rules(&ip(&["-4", "rule", "show"])?, &rt_labels());
+    fn rule_present(&self, cfg: &Config, fam: Family) -> Result<bool, String> {
+        let rules = parse_rules(&ip(&[fam.ip_flag(), "rule", "show"])?, &rt_labels());
         Ok(rules.iter().any(|r| r.catch_all && r.table == Some(cfg.routing.table)))
     }
 
-    fn ensure_rule(&self, cfg: &Config, probe: Option<u32>) -> Result<Option<String>, String> {
+    fn ensure_rule(&self, cfg: &Config, fam: Family, probe: Option<IpAddr>) -> Result<Option<String>, String> {
         let labels = rt_labels();
+        let f = fam.ip_flag();
         let table = cfg.routing.table;
-        let rules = parse_rules(&ip(&["-4", "rule", "show"])?, &labels);
+        let rules = parse_rules(&ip(&[f, "rule", "show"])?, &labels);
         let answer = match probe {
             Some(addr) => {
-                let text = ip(&["-4", "route", "get", &crate::cidr::fmt_ipv4(addr)])?;
+                let text = ip(&[f, "route", "get", &addr.to_string()])?;
                 parse_route_get(&text, &labels).map(|g| (g.table, is_tunnel(&g.dev)))
             }
             None => None,
         };
-        let add = |prio: u32| ip(&["-4", "rule", "add", "priority", &prio.to_string(), "from", "all", "lookup", &table.to_string()]);
+        let add = |prio: u32| ip(&[f, "rule", "add", "priority", &prio.to_string(), "from", "all", "lookup", &table.to_string()]);
+        let prefix = if fam == Family::V6 { "IPv6 " } else { "" };
         match plan_rule(&rules, table, cfg.routing.priority, answer) {
             RuleOp::Nothing => Ok(None),
             RuleOp::Add(p) => {
                 add(p)?;
-                Ok(Some(format!("rule restored (priority {p})")))
+                Ok(Some(format!("{prefix}rule restored (priority {p})")))
             }
             RuleOp::Move { from, to, shadow } => {
                 add(to)?;
-                let _ = ip(&["-4", "rule", "del", "priority", &from.to_string(), "from", "all", "lookup", &table.to_string()]);
+                let _ = ip(&[f, "rule", "del", "priority", &from.to_string(), "from", "all", "lookup", &table.to_string()]);
                 Ok(Some(format!(
-                    "rule moved from priority {from} to {to}: another rule at {shadow} was sending Russian traffic into the VPN"
+                    "{prefix}rule moved from priority {from} to {to}: another rule at {shadow} was sending Russian traffic into the VPN"
                 )))
             }
             RuleOp::Stuck { shadow } => {
@@ -318,16 +322,16 @@ impl Net for Linux {
         }
     }
 
-    fn installed(&self, cfg: &Config, _: &HashSet<Cidr>, _: &[Uplink]) -> Result<Vec<Installed>, String> {
-        match ip(&["-4", "route", "show", "table", &cfg.routing.table.to_string()]) {
-            Ok(text) => Ok(parse_table(&text)),
+    fn installed(&self, cfg: &Config, fam: Family, _: &HashSet<Cidr>, _: &[Uplink]) -> Result<Vec<Installed>, String> {
+        match ip(&[fam.ip_flag(), "route", "show", "table", &cfg.routing.table.to_string()]) {
+            Ok(text) => Ok(parse_table(&text).into_iter().filter(|i| i.prefix.fam == fam).collect()),
             // An empty, never-used table makes some iproute2 versions fail instead of printing nothing.
             Err(e) if e.contains("FIB table does not exist") => Ok(Vec::new()),
             Err(e) => Err(e),
         }
     }
 
-    fn apply(&self, cfg: &Config, uplink: &Uplink, plan: &Plan) -> Result<(), String> {
+    fn apply(&self, cfg: &Config, fam: Family, uplink: &Uplink, plan: &Plan) -> Result<(), String> {
         let table = cfg.routing.table;
         let replaced: HashSet<&Cidr> = plan.add.iter().collect();
         let mut script = String::new();
@@ -338,7 +342,7 @@ impl Net for Linux {
             script.push_str(&route_line(p, &uplink.via, &uplink.dev, table, "replace"));
         }
         // -force keeps going after a failing line (e.g. deleting a route that is already gone).
-        match util::run_stdin("ip", &["-4", "-force", "-batch", "-"], &script) {
+        match util::run_stdin("ip", &[fam.ip_flag(), "-force", "-batch", "-"], &script) {
             Ok(_) => Ok(()),
             Err(e) if plan.add.is_empty() => {
                 // Only deletions: "No such process" for an already-removed route is fine.
@@ -349,26 +353,27 @@ impl Net for Linux {
         }
     }
 
-    fn clear(&self, cfg: &Config, _: &HashSet<Cidr>, _: &[Uplink]) -> Result<usize, String> {
+    fn clear(&self, cfg: &Config, fam: Family, _: &HashSet<Cidr>, _: &[Uplink]) -> Result<usize, String> {
+        let f = fam.ip_flag();
         let table = cfg.routing.table.to_string();
-        let before = self.installed(cfg, &HashSet::new(), &[])?.len();
-        let _ = ip(&["-4", "route", "flush", "table", &table]);
+        let before = self.installed(cfg, fam, &HashSet::new(), &[])?.len();
+        let _ = ip(&[f, "route", "flush", "table", &table]);
         // The rule may have been moved by the shadow guard, so remove it wherever it is.
-        let rules = parse_rules(&ip(&["-4", "rule", "show"])?, &rt_labels());
+        let rules = parse_rules(&ip(&[f, "rule", "show"])?, &rt_labels());
         for r in rules.iter().filter(|r| r.catch_all && r.table == Some(cfg.routing.table)) {
-            let _ = ip(&["-4", "rule", "del", "priority", &r.priority.to_string(), "from", "all", "lookup", &table]);
+            let _ = ip(&[f, "rule", "del", "priority", &r.priority.to_string(), "from", "all", "lookup", &table]);
         }
         Ok(before)
     }
 
-    fn lookup(&self, _: &Config, ip_addr: u32) -> Result<Lookup, String> {
-        let text = ip(&["-4", "route", "get", &crate::cidr::fmt_ipv4(ip_addr)])?;
+    fn lookup(&self, _: &Config, addr: IpAddr) -> Result<Lookup, String> {
+        let text = ip(&[Family::of(&addr).ip_flag(), "route", "get", &addr.to_string()])?;
         let g = parse_route_get(&text, &rt_labels()).ok_or_else(|| format!("unexpected `ip route get` output: {}", text.trim()))?;
         Ok(Lookup { tunnel: is_tunnel(&g.dev), dev: g.dev, via: g.via })
     }
 
     fn watch_command(&self) -> Option<Vec<String>> {
-        Some(["ip", "-4", "monitor", "route", "rule", "link", "address"].iter().map(|s| s.to_string()).collect())
+        Some(["ip", "monitor", "route", "rule", "link", "address"].iter().map(|s| s.to_string()).collect())
     }
 
     fn tracks_ownership(&self) -> bool {
@@ -529,6 +534,30 @@ mod tests {
     }
 
     #[test]
+    fn ipv6_default_routes_and_tables_are_parsed() {
+        let r = parse_default_routes(
+            "default via fe80::1 dev eth0 proto ra metric 1024 expires 1790sec hoplimit 64 pref medium\n\
+             default dev wg0 metric 1024 pref medium\n\
+             default via fe80::2 dev eth1 proto ra metric 512 pref medium\n",
+        );
+        assert_eq!(r.len(), 3);
+        let u = pick_uplink(&r, &no_tunnels, &Config::default()).unwrap();
+        assert_eq!((u.dev.as_str(), u.via.as_deref()), ("eth1", Some("fe80::2")));
+        let t =
+            parse_table("2a00:1450::/32 via fe80::1 dev eth0 metric 1024 pref medium\n2a02:6b8::/32 dev ppp0 metric 1024 pref medium\n");
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0].prefix.to_string(), "2a00:1450::/32");
+        assert_eq!((t[0].via.as_deref(), t[1].via.clone()), (Some("fe80::1"), None));
+    }
+
+    #[test]
+    fn ipv6_route_get_is_parsed() {
+        let out = "2a00:1450::1 from :: via fe80::1 dev eth0 table runet proto static src 2001:db8::5 metric 1024 pref medium\n";
+        let g = parse_route_get(out, &labels()).unwrap();
+        assert_eq!((g.dev.as_str(), g.via.as_deref(), g.table), ("eth0", Some("fe80::1"), 900));
+    }
+
+    #[test]
     fn route_lines_use_replace_and_omit_via_for_point_to_point() {
         let c = Cidr::parse("5.0.0.0/8").unwrap();
         assert_eq!(
@@ -536,5 +565,10 @@ mod tests {
             "route replace 5.0.0.0/8 via 1.2.3.4 dev eth0 table 900\n"
         );
         assert_eq!(route_line(&c, &None, "ppp0", 900, "del"), "route del 5.0.0.0/8 dev ppp0 table 900\n");
+        let c6 = Cidr::parse("2a00:1450::/32").unwrap();
+        assert_eq!(
+            route_line(&c6, &Some("fe80::1".into()), "eth0", 900, "replace"),
+            "route replace 2a00:1450::/32 via fe80::1 dev eth0 table 900\n"
+        );
     }
 }
