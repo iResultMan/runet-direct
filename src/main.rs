@@ -1,6 +1,7 @@
 mod cidr;
 mod config;
 mod engine;
+mod export;
 mod fetch;
 mod log;
 mod net;
@@ -109,6 +110,17 @@ enum Cmd {
     List {
         #[arg(long)]
         json: bool,
+    },
+    /// Print the Russian address list for other VPN software: WireGuard AllowedIPs, OpenVPN routes, Amnezia, plain CIDR
+    Export {
+        #[arg(long, value_enum, default_value = "cidr")]
+        format: export::Format,
+        /// IPv4 only (the OpenVPN and Amnezia formats are always IPv4 only)
+        #[arg(long)]
+        ipv4_only: bool,
+        /// Write to FILE instead of the screen
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
     /// Show or change settings: `config`, `config path`, `config get ipv6.enabled`, `config set ipv6.enabled false`
     Config {
@@ -262,6 +274,7 @@ fn main() {
         Cmd::Pause { when } => edit_manual(&paths, net.as_ref(), &everything(), Some(Verdict::Vpn), when.until()),
         Cmd::Resume => edit_manual(&paths, net.as_ref(), &everything(), None, None),
         Cmd::List { json } => list(&paths, json),
+        Cmd::Export { format, ipv4_only, output } => export_list(&paths, format, ipv4_only, output),
         Cmd::Config { action } => config_cmd(&paths, net.as_ref(), action),
         Cmd::Run { log_file } => {
             if let Some(f) = log_file {
@@ -631,6 +644,27 @@ fn list(paths: &Paths, as_json: bool) {
     }
     for e in errors {
         eprintln!("warning: {e}");
+    }
+}
+
+fn export_list(paths: &Paths, format: export::Format, ipv4_only: bool, output: Option<PathBuf>) {
+    let cfg = load_config(paths);
+    let state = State::load(paths);
+    let desired = engine::load_desired(paths, &cfg, &state, log::now());
+    if desired.v4.is_empty() {
+        die("there is no address list yet: install the service (it downloads the list) or run `runet-direct refresh`");
+    }
+    let text = export::render(format, &desired.v4, &desired.v6, !ipv4_only);
+    match output {
+        Some(p) => {
+            std::fs::write(&p, &text).unwrap_or_else(|e| die(format!("{}: {e}", p.display())));
+            eprintln!("wrote {} ({} IPv4 and {} IPv6 networks of the list)", p.display(), desired.v4.len(), desired.v6.len());
+        }
+        None => {
+            use std::io::Write;
+            // `export | head` closes the pipe early; that is not an error worth a panic.
+            let _ = std::io::stdout().write_all(text.as_bytes());
+        }
     }
 }
 

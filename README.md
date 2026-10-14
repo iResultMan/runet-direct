@@ -109,12 +109,28 @@ Everything except `status`, `check`, `list` and `config` needs root / Administra
 | `add TARGET...` | Always go direct: a link pasted from the browser (`https://site.ru/page`), a domain, an IP, `a.b.c.d/n` or an IPv6 prefix. `--file FILE` (or `-` for stdin) takes a whole list. |
 | `exclude TARGET...` | Never go direct, even if the Russian list contains it. Takes the same kinds of target, links included, and masks: `exclude '*.site.ru'` (quoted; `.site.ru` needs no quotes). `--for 30m` / `--until <time>` makes it temporary and self-reverting. |
 | `remove TARGET...` / `list [--json]` | Edit / show the manual list. |
+| `export [--format cidr\|wireguard\|openvpn\|amnezia]` | Print the Russian address list (plus your manual list) for other VPN software, see below. No admin rights needed. |
 | `config get KEY` / `config set KEY VALUE` | Read or change one setting, e.g. `config set ipv6.enabled false`. Comments in the file are kept. |
 | `install` / `uninstall [--purge]` | Install the service and enable it at boot / remove it **and every route it added**. |
 | `start` / `stop` / `restart` / `enable` / `disable` | Control the service. **`stop` leaves the routes in place** so Russian traffic never silently falls back into the VPN. |
 | `apply` / `refresh` / `clear` | One-shot sync / download the list now / remove all routes. |
 
 `runet-direct --help` lists everything. Other programs should rely on `--json` and the exit codes, not on the text.
+
+## Use the list in another VPN app
+
+If a VPN client does the splitting itself (or you want to feed a router), `runet-direct export` prints the same list in
+the shape that software expects. It includes your `manual.list` and leaves out your exclusions.
+
+| Command | Result |
+| --- | --- |
+| `runet-direct export --format cidr` | The Russian blocks, one network per line. |
+| `runet-direct export --format wireguard` | One `AllowedIPs = ...` line covering everything **except** the Russian blocks, for a `[Peer]` section. Large (about 22,000 networks), so expect a slow import on a phone. |
+| `runet-direct export --format openvpn` | `route ... net_gateway` lines that keep the Russian blocks out of the tunnel (IPv4). |
+| `runet-direct export --format amnezia` | A JSON site list for AmneziaVPN's "addresses from the list should not be accessed via VPN" (IPv4). |
+
+Add `--output FILE` to write a file and `--ipv4-only` to drop IPv6. The service has to have downloaded the list once
+(`install` does that).
 
 ## Settings
 
