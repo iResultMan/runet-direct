@@ -183,8 +183,11 @@ impl Net for MacOs {
     }
 
     fn tunnels(&self) -> Vec<String> {
+        // gif0 and stf0 exist on every Mac and carry nothing; they are not worth listing.
         util::run("ifconfig", &["-l"])
-            .map(|s| s.split_whitespace().filter(|n| is_tunnel(n)).map(String::from).collect())
+            .map(|s| {
+                s.split_whitespace().filter(|n| is_tunnel(n) && !n.starts_with("gif") && !n.starts_with("stf")).map(String::from).collect()
+            })
             .unwrap_or_default()
     }
 
