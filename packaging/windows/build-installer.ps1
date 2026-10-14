@@ -1,5 +1,5 @@
 # Build the Windows installer around an already built runet-direct.exe (needs Inno Setup 6: choco install innosetup).
-#   .\packaging\windows\build-installer.ps1 -Exe target\release\runet-direct.exe -Version 0.1.0 -Out dist\runet-direct-setup-x86_64.exe
+#   .\packaging\windows\build-installer.ps1 -Exe target\release\runet-direct.exe -Version 1.0.0 -Out dist\runet-direct-setup-x86_64.exe
 param(
   [Parameter(Mandatory)] [string]$Exe,
   [Parameter(Mandatory)] [string]$Version,

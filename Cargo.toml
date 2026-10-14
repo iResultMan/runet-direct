@@ -1,6 +1,6 @@
 [package]
 name = "runet-direct"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.89"
 description = "Keeps Russian-internet traffic off your VPN: a cross-platform background service plus CLI"

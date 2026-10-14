@@ -4,7 +4,7 @@ Installs runet-direct on Windows from the latest GitHub release.
   Open PowerShell AS ADMINISTRATOR, then:
     irm https://raw.githubusercontent.com/iResultMan/runet-direct/main/install.ps1 | iex
   or, to pin a version / skip starting:
-    .\install.ps1 -Version v0.1.0 -NoStart
+    .\install.ps1 -Version v1.0.0 -NoStart
 
 It downloads one executable, checks its SHA-256 and runs `runet-direct.exe install`, which registers
 a scheduled task that starts at boot as SYSTEM and starts it now. Read it before running it.

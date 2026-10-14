@@ -1,8 +1,8 @@
-; Inno Setup script. Build:  iscc /DAppVersion=0.1.0 /DSourceExe=<path to runet-direct.exe> runet-direct.iss
+; Inno Setup script. Build:  iscc /DAppVersion=1.0.0 /DSourceExe=<path to runet-direct.exe> runet-direct.iss
 ; Silent install for scripts and tests:  runet-direct-setup-x86_64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "1.0.0"
 #endif
 #ifndef SourceExe
   #define SourceExe "..\..\target\x86_64-pc-windows-msvc\release\runet-direct.exe"

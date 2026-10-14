@@ -1,8 +1,15 @@
 # Changelog
 
-## 0.1.0
+## 1.0.0
 
-First release.
+First release. From here on, semantic versioning applies to what other programs and users rely on:
+
+- the commands and their flags, the `--json` fields of `status`, `check` and `list`, and the exit codes;
+- the keys of `config.toml` and the format of `manual.list`;
+- where files live on each system and the names of the service (`runet-direct`), the release files and the install
+  scripts.
+
+Anything that breaks one of these needs a new major version; additions do not.
 
 - Background service for Linux (systemd), macOS (launchd) and Windows (Task Scheduler) that sends Russian address
   blocks out through the physical connection while everything else keeps using the VPN. No knowledge of the VPN is

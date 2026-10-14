@@ -1,6 +1,7 @@
 name: Release
 
-# Push a tag like v0.1.0 to publish binaries and installers for every supported system.
+# Push a tag like v1.0.0 to publish binaries and installers for every supported system.
+# A tag with a suffix (v1.0.0-rc.1) is published as a pre-release; its packages carry the plain version.
 on:
   push:
     tags: ["v*"]
@@ -18,6 +19,7 @@ jobs:
       - name: Tag matches Cargo.toml
         run: |
           tag="${GITHUB_REF_NAME#v}"
+          tag="${tag%%-*}"   # v1.0.0-rc.1 -> 1.0.0
           cargo_version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           [ "$tag" = "$cargo_version" ] || { echo "tag v$tag != Cargo.toml $cargo_version"; exit 1; }
 
@@ -89,7 +91,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y rpm
       - name: Build packages
         run: |
-          v="${GITHUB_REF_NAME#v}"
+          v="${GITHUB_REF_NAME#v}"; v="${v%%-*}"
           mkdir dist
           packaging/linux/build-deb.sh raw/raw-x86_64-unknown-linux-musl/runet-direct  amd64   "$v" dist/runet-direct-linux-amd64.deb
           packaging/linux/build-deb.sh raw/raw-aarch64-unknown-linux-musl/runet-direct arm64   "$v" dist/runet-direct-linux-arm64.deb
@@ -112,7 +114,7 @@ jobs:
           path: raw
       - name: One package for Intel and Apple Silicon
         run: |
-          v="${GITHUB_REF_NAME#v}"
+          v="${GITHUB_REF_NAME#v}"; v="${v%%-*}"
           mkdir dist
           lipo -create -output runet-direct-universal \
             raw/raw-x86_64-apple-darwin/runet-direct raw/raw-aarch64-apple-darwin/runet-direct
@@ -138,7 +140,7 @@ jobs:
       - name: Build the installer
         shell: pwsh
         run: |
-          $v = "${{ github.ref_name }}".TrimStart('v')
+          $v = ("${{ github.ref_name }}".TrimStart('v') -split '-')[0]
           .\packaging\windows\build-installer.ps1 -Exe raw\runet-direct.exe -Version $v -Out dist\runet-direct-setup-x86_64.exe
       - uses: actions/upload-artifact@v4
         with:
@@ -173,3 +175,4 @@ jobs:
         with:
           files: collected/*
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

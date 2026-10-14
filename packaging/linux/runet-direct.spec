@@ -1,6 +1,6 @@
 # RPM around an already built binary (no compiler needed).
 #   rpmbuild -bb --target <x86_64|aarch64> \
-#     --define "rd_version 0.1.0" --define "rd_binary /path/to/runet-direct" --define "rd_root /path/to/repo" \
+#     --define "rd_version 1.0.0" --define "rd_binary /path/to/runet-direct" --define "rd_root /path/to/repo" \
 #     --define "_topdir /tmp/rpmtop" packaging/linux/runet-direct.spec
 Name:           runet-direct
 Version:        %{rd_version}
@@ -44,5 +44,5 @@ exit 0
 %doc /usr/share/doc/runet-direct/README.ru.md
 
 %changelog
-* Wed Oct 14 2026 iResultMan <i.result.man@gmail.com> - 0.1.0-1
+* Wed Oct 14 2026 iResultMan <i.result.man@gmail.com> - 1.0.0-1
 - Initial package

@@ -2,7 +2,7 @@
 # Installs runet-direct on Linux or macOS from the latest GitHub release.
 #
 #   curl -fsSL https://raw.githubusercontent.com/iResultMan/runet-direct/main/install.sh | sudo sh
-#   sudo sh install.sh [--version v0.1.0] [--no-start]
+#   sudo sh install.sh [--version v1.0.0] [--no-start]
 #
 # It downloads one binary, checks its SHA-256, and runs `runet-direct install`, which registers
 # the background service (systemd / launchd) and starts it. Read it before running it.
