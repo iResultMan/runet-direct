@@ -78,6 +78,17 @@ rule is created for it.
 RIPE writes the size of an IPv4 block as an address count and the size of an IPv6 block as a prefix length; the parser
 handles both. Thresholds against truncated downloads apply per family (`min_prefixes` for IPv4, a tenth of it for IPv6).
 
+## Names, masks and delivery networks
+
+A site name is turned into addresses by the system resolver, every few hours. `site.ru` and `www.site.ru` always
+travel together. A mask (`*.site.ru` or `.site.ru`) means the site itself plus the subdomains that real services use
+most (`COMMON_LABELS` in `src/sources.rs`): DNS cannot list a domain's subdomains, so anything outside that list has
+to be added by its own name.
+
+A mask solves a *naming* problem, not an *addressing* one. A site behind a delivery network resolves to addresses that
+rotate and are shared with other sites, and the browser may be told different ones than the daemon sees. Routing by
+address can only follow what the daemon resolved.
+
 ## Known limits
 
 - A firewall-based VPN kill switch blocks the direct path by design.

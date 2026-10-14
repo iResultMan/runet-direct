@@ -210,6 +210,7 @@ Health:   <span class="ok">OK</span></pre>
       <p>Российские адреса продолжат идти напрямую, остальные поведут себя так, как настроено у вас в системе. Службе VPN не нужен.</p></div></details>
     <details><summary>Как отправить один сайт через VPN?</summary><div>
       <p>Вставьте ссылку на сайт прямо из браузера: <code>sudo runet-direct exclude https://сайт.ru/любая-страница</code>. Диапазоны адресов знать не нужно, программа берёт адреса, на которые сейчас указывает имя сайта, и обновляет их каждые несколько часов. Чтобы вернуть как было: <code>sudo runet-direct remove сайт.ru</code>. Чтобы только на время: добавьте <code>--for 1h</code>.</p>
+      <p>Имя с <code>www</code> и без ведёт себя одинаково. Для сайта вместе с поддоменами: <code>sudo runet-direct exclude '*.сайт.ru'</code> (в кавычках; без кавычек можно писать <code>.сайт.ru</code>). Маска проверяет сам сайт и самые частые поддомены (api, m, static, cdn, lk, login и другие); остальные поддомены добавьте по имени.</p>
       <p>Если у сайта очень много адресов (он стоит за сетью доставки), сработает не для всех сразу: проверяйте командой <code>runet-direct check сайт.ru</code>.</p></div></details>
     <details><summary>Один сайт всё равно открывается через VPN. Почему?</summary><div>
       <p>Список строится по российским адресам. Сайт, который стоит за зарубежной сетью доставки, в него не попадёт. Добавьте его вручную, можно вставить ссылку: <code>sudo runet-direct add https://имя-сайта.ru</code>. Проверить результат можно командой <code>runet-direct check имя-сайта.ru</code>.</p></div></details>
@@ -220,6 +221,14 @@ Health:   <span class="ok">OK</span></pre>
     <details><summary>Не блокирует ли это «аварийный выключатель» моего VPN?</summary><div>
       <p>Если выключатель устроен как правило файрвола, он блокирует и прямой трафик, и программа ничего с этим сделать не может. Отключите выключатель или добавьте исключение для вашего подключения.</p></div></details>
   </div>
+</section>
+
+<section id="thanks" aria-labelledby="thanks-title">
+  <h2 id="thanks-title" class="rise">Программа помогла?</h2>
+  <div class="prose rise" style="--d:100ms;margin-top:1.25rem">
+    <p>Звезда проекту на GitHub — лучший способ сказать спасибо и помочь другим людям найти программу.</p>
+  </div>
+  <p class="rise" style="--d:200ms;margin-top:1.75rem"><a class="btn" href="https://github.com/iResultMan/runet-direct"><span>Поставить звезду на GitHub</span><svg class="arrow" viewBox="0 0 18 16" aria-hidden="true"><path d="M0 8h16M10 2l6 6-6 6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg></a></p>
 </section>
 
 </main>

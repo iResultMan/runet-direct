@@ -210,6 +210,7 @@ Health:   <span class="ok">OK</span></pre>
       <p>Russian addresses keep going direct; everything else behaves the way your system is set up. The service does not need the VPN.</p></div></details>
     <details><summary>How do I send one site through the VPN?</summary><div>
       <p>Paste the link straight from the browser: <code>sudo runet-direct exclude https://site.ru/any-page</code>. You do not need to know any address ranges: the program takes the addresses the site name points to right now and refreshes them every few hours. To undo: <code>sudo runet-direct remove site.ru</code>. For a limited time: add <code>--for 1h</code>.</p>
+      <p>A name with and without <code>www</code> behaves the same. For a site with its subdomains: <code>sudo runet-direct exclude '*.site.ru'</code> (quoted; without quotes you can write <code>.site.ru</code>). The mask checks the site itself and the most common subdomains (api, m, static, cdn, lk, login and more); add any other subdomain by its own name.</p>
       <p>If a site has very many addresses (it sits behind a delivery network), it may not work for all of them at once: check with <code>runet-direct check site.ru</code>.</p></div></details>
     <details><summary>One site still opens through the VPN. Why?</summary><div>
       <p>The list is built from Russian address blocks. A site behind a foreign delivery network is not in it. Add it by hand; pasting a link works: <code>sudo runet-direct add https://site-name.ru</code>. Verify with <code>runet-direct check site-name.ru</code>.</p></div></details>
@@ -220,6 +221,14 @@ Health:   <span class="ok">OK</span></pre>
     <details><summary>What about my VPN’s kill switch?</summary><div>
       <p>If the kill switch is a firewall rule, it blocks direct traffic too and the program cannot change that. Turn the switch off or add an exception for your connection.</p></div></details>
   </div>
+</section>
+
+<section id="thanks" aria-labelledby="thanks-title">
+  <h2 id="thanks-title" class="rise">Did it help?</h2>
+  <div class="prose rise" style="--d:100ms;margin-top:1.25rem">
+    <p>A star on GitHub is the best way to say thanks and to help other people find the program.</p>
+  </div>
+  <p class="rise" style="--d:200ms;margin-top:1.75rem"><a class="btn" href="https://github.com/iResultMan/runet-direct"><span>Star the project on GitHub</span><svg class="arrow" viewBox="0 0 18 16" aria-hidden="true"><path d="M0 8h16M10 2l6 6-6 6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg></a></p>
 </section>
 
 </main>

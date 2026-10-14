@@ -134,7 +134,7 @@ expect_not "after remove the host is back in the VPN" rd check 1.2.3.4
 
 step "a person pastes a link to one site (a name, not a range)"
 mkdir -p "/etc/netns/$NS"
-printf '213.59.9.9 shop.example.test\n8.8.4.4 abroad.example.test\n' > "/etc/netns/$NS/hosts"
+printf '213.59.9.9 shop.example.test\n213.59.9.8 www.shop.example.test\n8.8.4.4 abroad.example.test\n213.59.8.4 example.test\n213.59.8.5 api.example.test\n213.59.8.6 static.example.test\n213.59.7.7 store.test\n213.59.7.8 www.store.test\n' > "/etc/netns/$NS/hosts"
 expect "a Russian-range site is direct before" rd check 213.59.9.9
 rd exclude "https://Shop.Example.test:8443/cart?id=1#pay" >/dev/null
 expect_not "pasted link: the site now goes through the VPN" rd check 213.59.9.9
@@ -148,6 +148,27 @@ expect "pasted link: a foreign-hosted site can be sent direct" rd check 8.8.4.4
 rd remove abroad.example.test >/dev/null
 expect_not "and removed again" rd check 8.8.4.4
 expect_not "garbage is refused with a clear message" rd add "https://"
+
+echo "-- www and bare names always go together, and a mask covers the usual subdomains"
+rd exclude store.test >/dev/null
+expect_not "the bare name is excluded" rd check 213.59.7.7
+expect_not "its www partner is excluded with it" rd check 213.59.7.8
+rd remove store.test >/dev/null
+expect "both come back together" rd check 213.59.7.8
+rd exclude www.store.test >/dev/null
+expect_not "excluding the www name also excludes the bare name" rd check 213.59.7.7
+rd remove www.store.test >/dev/null
+rd exclude '*.example.test' >/dev/null
+expect_not "mask: the site itself" rd check 213.59.8.4
+expect_not "mask: api. subdomain" rd check 213.59.8.5
+expect_not "mask: static. subdomain" rd check 213.59.8.6
+expect "mask: an unrelated neighbour stays direct" rd check 213.59.8.9
+rd list | grep -q '^vpn *\*\.example\.test' && ok "the list shows the mask" || die "mask not listed"
+rd remove '*.example.test' >/dev/null
+expect "removing the mask brings them back" rd check 213.59.8.5
+rd exclude .example.test >/dev/null
+expect_not "the shell-safe spelling .site works the same" rd check 213.59.8.5
+rd remove .example.test >/dev/null
 
 step "each family can be switched off on its own"
 rd config set ipv6.enabled false >/dev/null

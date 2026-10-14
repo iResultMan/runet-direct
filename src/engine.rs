@@ -93,9 +93,9 @@ pub fn load_desired(paths: &Paths, cfg: &Config, state: &State, now: u64) -> Des
     for e in entries.iter().filter(|e| e.active(now)) {
         let ranges: Vec<(Family, Range)> = match &e.target {
             Target::Net(c) => vec![(c.fam, c.range())],
-            Target::Host(h) => state
+            Target::Host(_) | Target::Wildcard(_) => state
                 .resolved
-                .get(h)
+                .get(&e.target.to_string())
                 .map(|r| {
                     r.ips.iter().filter_map(|ip| ip.parse::<IpAddr>().ok()).map(|ip| (Family::of(&ip), sources::host_range(&ip))).collect()
                 })
@@ -140,7 +140,21 @@ pub fn paused(paths: &Paths, now: u64) -> Option<Option<u64>> {
 }
 
 fn resolve_host(host: &str) -> Vec<String> {
-    let mut ips: Vec<String> = (host, 0u16).to_socket_addrs().map(|it| it.map(|a| a.ip().to_string()).collect()).unwrap_or_default();
+    (host, 0u16).to_socket_addrs().map(|it| it.map(|a| a.ip().to_string()).collect()).unwrap_or_default()
+}
+
+/// Resolve several names at once (a mask looks up dozens) and return the union of their addresses.
+fn resolve_names(names: &[String]) -> Vec<String> {
+    let mut ips: Vec<String> = if names.len() <= 2 {
+        names.iter().flat_map(|n| resolve_host(n)).collect()
+    } else {
+        let chunk = names.len().div_ceil(8);
+        std::thread::scope(|s| {
+            let handles: Vec<_> =
+                names.chunks(chunk).map(|part| s.spawn(move || part.iter().flat_map(|n| resolve_host(n)).collect::<Vec<_>>())).collect();
+            handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+        })
+    };
     ips.sort();
     ips.dedup();
     ips
@@ -148,22 +162,27 @@ fn resolve_host(host: &str) -> Vec<String> {
 
 fn refresh_hosts(paths: &Paths, state: &mut State, now: u64, force: bool) {
     let (entries, _) = read_manual(paths);
-    let hosts: HashSet<String> =
-        entries.iter().filter_map(|e| if let Target::Host(h) = &e.target { Some(h.clone()) } else { None }).collect();
-    state.resolved.retain(|h, _| hosts.contains(h));
-    for h in hosts {
-        let fresh = state.resolved.get(&h).is_some_and(|r| now.saturating_sub(r.at) < HOST_TTL_SECS && !r.ips.is_empty());
+    let targets: Vec<Target> = entries.into_iter().map(|e| e.target).filter(|t| !t.names().is_empty()).collect();
+    let keys: HashSet<String> = targets.iter().map(Target::to_string).collect();
+    state.resolved.retain(|k, _| keys.contains(k));
+    let mut seen = HashSet::new();
+    for t in targets {
+        let key = t.to_string();
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let fresh = state.resolved.get(&key).is_some_and(|r| now.saturating_sub(r.at) < HOST_TTL_SECS && !r.ips.is_empty());
         if fresh && !force {
             continue;
         }
-        let ips = resolve_host(&h);
+        let ips = resolve_names(&t.names());
         if ips.is_empty() {
-            log::warn(format!("{h}: no addresses (keeping previous ones)"));
-            if let Some(r) = state.resolved.get_mut(&h) {
+            log::warn(format!("{key}: no addresses (keeping previous ones)"));
+            if let Some(r) = state.resolved.get_mut(&key) {
                 r.at = now.saturating_sub(HOST_TTL_SECS) + 600; // retry in ~10 minutes
             }
         } else {
-            state.resolved.insert(h, Resolved { at: now, ips });
+            state.resolved.insert(key, Resolved { at: now, ips });
         }
     }
 }

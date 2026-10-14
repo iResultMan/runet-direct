@@ -107,7 +107,7 @@ Everything except `status`, `check`, `list` and `config` needs root / Administra
 | `check TARGET` | Where would this IP, CIDR or domain go? Prints `direct via <interface>` or `TUNNEL`. Exit `0` direct, `1` tunnel. |
 | `pause [--for 1h]` / `resume` | Send **everything** through the VPN for a while, e.g. to test a site as a foreigner would see it. |
 | `add TARGET...` | Always go direct: a link pasted from the browser (`https://site.ru/page`), a domain, an IP, `a.b.c.d/n` or an IPv6 prefix. `--file FILE` (or `-` for stdin) takes a whole list. |
-| `exclude TARGET...` | Never go direct, even if the Russian list contains it. Takes the same kinds of target, links included. `--for 30m` / `--until <time>` makes it temporary and self-reverting. |
+| `exclude TARGET...` | Never go direct, even if the Russian list contains it. Takes the same kinds of target, links included, and masks: `exclude '*.site.ru'` (quoted; `.site.ru` needs no quotes). `--for 30m` / `--until <time>` makes it temporary and self-reverting. |
 | `remove TARGET...` / `list [--json]` | Edit / show the manual list. |
 | `config get KEY` / `config set KEY VALUE` | Read or change one setting, e.g. `config set ipv6.enabled false`. Comments in the file are kept. |
 | `install` / `uninstall [--purge]` | Install the service and enable it at boot / remove it **and every route it added**. |

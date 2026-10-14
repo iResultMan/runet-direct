@@ -338,10 +338,17 @@ fn install(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, opts: Insta
     } else {
         mgr.start().unwrap_or_else(|e| die(e));
     }
+    // Asked once, after a manual install; packages and installers stay quiet.
+    let star = || {
+        if !opts.in_place {
+            println!("If runet-direct helps you, a star on GitHub helps others find it: https://github.com/iResultMan/runet-direct");
+        }
+    };
     if opts.no_wait {
         println!(
             "started; the first sync (the country address list, ~18 MB) continues in the background. Check with `runet-direct status`."
         );
+        star();
         return;
     }
     let cfg = load_config_lenient(paths);
@@ -352,6 +359,7 @@ fn install(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, opts: Insta
         if (s.ru.is_some() || !cfg.ru.enabled) && !s.uplinks.is_empty() {
             let n = s.last_apply.map(|a| a.total).unwrap_or(0);
             println!("done: {n} routes installed. Check anytime with `runet-direct status`.");
+            star();
             return;
         }
         if let Some(e) = s.last_refresh_error {
@@ -501,7 +509,7 @@ fn check(paths: &Paths, net: &dyn Net, target: Option<String>, as_json: bool) {
     };
     let ips: Vec<std::net::IpAddr> = match sources::parse_target(&target).unwrap_or_else(|e| die(e)) {
         Target::Net(c) => vec![c.probe()],
-        Target::Host(h) => {
+        Target::Host(h) | Target::Wildcard(h) => {
             use std::net::ToSocketAddrs;
             let v: Vec<std::net::IpAddr> = (h.as_str(), 0u16).to_socket_addrs().map(|it| it.map(|a| a.ip()).collect()).unwrap_or_default();
             if v.is_empty() {
@@ -601,8 +609,8 @@ fn list(paths: &Paths, as_json: bool) {
             .iter()
             .map(|e| {
                 let ips = match &e.target {
-                    Target::Host(h) => state.resolved.get(h).map(|r| r.ips.clone()),
                     Target::Net(_) => None,
+                    t => state.resolved.get(&t.to_string()).map(|r| r.ips.clone()),
                 };
                 json!({"verdict": e.verdict.word(), "target": e.target.to_string(), "until": e.until.map(log::iso), "resolved": ips})
             })
@@ -615,8 +623,8 @@ fn list(paths: &Paths, as_json: bool) {
     }
     for e in &entries {
         let extra = match &e.target {
-            Target::Host(h) => state.resolved.get(h).map(|r| format!("  -> {}", r.ips.join(", "))).unwrap_or_default(),
             Target::Net(_) => String::new(),
+            t => state.resolved.get(&t.to_string()).map(|r| format!("  -> {}", r.ips.join(", "))).unwrap_or_default(),
         };
         let until = e.until.map(|u| format!("  (until {})", log::iso(u))).unwrap_or_default();
         println!("{:<7}{}{}{}", e.verdict.word(), e.target, until, extra);

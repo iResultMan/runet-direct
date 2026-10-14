@@ -39,6 +39,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [CustomMessages]
 russian.Registering=Регистрируем службу и загружаем список российских адресов (до минуты)...
 english.Registering=Registering the service and downloading the list of Russian address blocks (up to a minute)...
+russian.StarProject=Поставить звезду проекту на GitHub (открыть страницу)
+english.StarProject=Star the project on GitHub (opens the page)
 russian.ShowStatus=Показать состояние службы
 english.ShowStatus=Show the service status
 
@@ -52,6 +54,7 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 [Run]
 Filename: "{app}\runet-direct.exe"; Parameters: "install --in-place"; StatusMsg: "{cm:Registering}"; Flags: runhidden waituntilterminated
 Filename: "{cmd}"; Parameters: "/k """"{app}\runet-direct.exe"" status"""; Description: "{cm:ShowStatus}"; Flags: postinstall nowait skipifsilent
+Filename: "https://github.com/iResultMan/runet-direct"; Description: "{cm:StarProject}"; Flags: postinstall shellexec nowait skipifsilent unchecked
 
 [UninstallRun]
 Filename: "{app}\runet-direct.exe"; Parameters: "uninstall --in-place"; Flags: runhidden waituntilterminated; RunOnceId: "RunetDirectUninstall"

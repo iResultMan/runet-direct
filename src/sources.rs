@@ -92,7 +92,10 @@ impl Verdict {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
     Net(Cidr),
+    /// A site name. `site.ru` and `www.site.ru` always go together.
     Host(String),
+    /// `*.site.ru`: the site, `www.` and the usual subdomains (see [`COMMON_LABELS`]).
+    Wildcard(String),
 }
 
 impl std::fmt::Display for Target {
@@ -100,6 +103,7 @@ impl std::fmt::Display for Target {
         match self {
             Target::Net(c) => write!(f, "{c}"),
             Target::Host(h) => write!(f, "{h}"),
+            Target::Wildcard(b) => write!(f, "*.{b}"),
         }
     }
 }
@@ -140,6 +144,33 @@ fn host_of(s: &str) -> &str {
     }
 }
 
+/// Subdomains a wildcard looks for. DNS cannot list a domain's subdomains, so a mask checks the names that
+/// real services use most; a subdomain outside this list has to be added by its own name.
+pub const COMMON_LABELS: &[&str] = &[
+    "www", "m", "mobile", "api", "app", "apps", "static", "cdn", "img", "images", "media", "assets", "files", "mail", "login", "id", "sso",
+    "auth", "account", "accounts", "lk", "my", "cabinet", "pay", "payment", "secure", "online", "ib", "client", "clients", "shop", "store",
+    "blog", "news", "help", "support", "docs", "portal", "gate", "gw", "edge", "ws", "chat", "video", "web", "market",
+];
+
+/// The other half of a `site.ru` / `www.site.ru` pair.
+fn www_pair(host: &str) -> Option<String> {
+    if let Some(bare) = host.strip_prefix("www.") {
+        return bare.contains('.').then(|| bare.to_string());
+    }
+    (host.matches('.').count() == 1).then(|| format!("www.{host}"))
+}
+
+impl Target {
+    /// Every name to resolve for this target (empty for networks).
+    pub fn names(&self) -> Vec<String> {
+        match self {
+            Target::Net(_) => Vec::new(),
+            Target::Host(h) => std::iter::once(h.clone()).chain(www_pair(h)).collect(),
+            Target::Wildcard(b) => std::iter::once(b.clone()).chain(COMMON_LABELS.iter().map(|l| format!("{l}.{b}"))).collect(),
+        }
+    }
+}
+
 pub fn parse_target(s: &str) -> Result<Target, String> {
     if let Some(c) = Cidr::parse(s) {
         return Ok(Target::Net(c));
@@ -149,13 +180,18 @@ pub fn parse_target(s: &str) -> Result<Target, String> {
     if let Some(c) = Cidr::parse(s) {
         return Ok(Target::Net(c));
     }
+    // `*.site.ru` or, safe from shell expansion, `.site.ru`
+    let (wildcard, s) = match s.strip_prefix("*.").or_else(|| s.strip_prefix('.')) {
+        Some(rest) => (true, rest),
+        None => (false, s),
+    };
     let looks_numeric = s.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b'/');
     let host = s.trim_end_matches('.').to_ascii_lowercase();
     let valid_chars = host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.' || b == b'_');
     if looks_numeric || !valid_chars || host.len() > 253 || !host.contains('.') || host.starts_with('.') || host.contains("..") {
         return Err(format!("`{original}` is not an address, a network, a domain name or a link to a site"));
     }
-    Ok(Target::Host(host))
+    Ok(if wildcard { Target::Wildcard(host) } else { Target::Host(host) })
 }
 
 /// `[direct|vpn] <target> [until=<ISO time | unix seconds>]  # comment`. `None` for blank/comment lines.
@@ -368,6 +404,26 @@ mod tests {
         for bad in ["http://", "https:///x", "https://localhost/x", "mailto:me@site", "https://exa mple.ru"] {
             assert!(parse_target(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn masks_and_www_pairs() {
+        assert_eq!(parse_target("*.site.ru").unwrap(), Target::Wildcard("site.ru".into()));
+        assert_eq!(parse_target(".Site.ru").unwrap(), Target::Wildcard("site.ru".into()), "the shell-safe spelling");
+        assert_eq!(parse_target("https://*.site.ru/x").unwrap(), Target::Wildcard("site.ru".into()));
+        assert_eq!(Target::Wildcard("site.ru".into()).to_string(), "*.site.ru");
+        for bad in ["*.ru", ".ru", "*.", "*site.ru", "*.*.ru", "*"] {
+            assert!(parse_target(bad).is_err(), "{bad}");
+        }
+        let names = |t: &str| parse_target(t).unwrap().names();
+        assert_eq!(names("site.ru"), ["site.ru", "www.site.ru"]);
+        assert_eq!(names("www.site.ru"), ["www.site.ru", "site.ru"]);
+        assert_eq!(names("online.site.ru"), ["online.site.ru"], "a deeper name gets no www partner");
+        assert_eq!(names("www.ru"), ["www.ru"], "the bare part must be a real name");
+        let w = names("*.site.ru");
+        assert!(w.starts_with(&["site.ru".to_string(), "www.site.ru".to_string()]) && w.contains(&"api.site.ru".to_string()));
+        assert_eq!(w.len(), COMMON_LABELS.len() + 1);
+        assert!(parse_target("1.2.3.0/24").unwrap().names().is_empty());
     }
 
     #[test]
