@@ -233,7 +233,13 @@ impl Net for MacOs {
     }
 
     fn watch_command(&self) -> Option<Vec<String>> {
-        Some(vec!["route".into(), "-n".into(), "monitor".into()])
+        // `route monitor` block-buffers its output when stdout is a pipe, which can hold an event back
+        // for a long time. Running it on a pseudo-terminal makes it line-buffered.
+        if std::path::Path::new("/usr/bin/script").exists() {
+            Some(["/usr/bin/script", "-q", "/dev/null", "route", "-n", "monitor"].iter().map(|s| s.to_string()).collect())
+        } else {
+            Some(vec!["route".into(), "-n".into(), "monitor".into()])
+        }
     }
 
     fn tracks_ownership(&self) -> bool {
