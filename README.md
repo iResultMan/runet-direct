@@ -5,7 +5,7 @@
 <h1 align="center">runet-direct</h1>
 
 <p align="center">
-  <b>Russian sites go straight out. Everything else goes through your VPN.<br>Install once, forget it.</b>
+  <b>Keep your VPN on all the time. Russian sites go straight out, everything else goes through the VPN.<br>Install once, forget it.</b>
 </p>
 
 <p align="center">
@@ -26,8 +26,12 @@
 ## The problem
 
 A VPN sends *everything* through its tunnel, including Russian banks, Gosuslugi, marketplaces and mail. Many of them
-refuse foreign addresses, ask for extra verification, or just load slowly. Turning the VPN off for them means turning
-it off for everything. Per-app split tunneling does not help when one browser opens both worlds.
+refuse foreign addresses, ask for extra verification, or just load slowly. So you switch the VPN off for them, then on
+again for everything else, and you keep having to remember which state it is in right now. Per-app split tunneling does
+not help when one browser opens both worlds.
+
+**With runet-direct you switch nothing.** The VPN stays on all the time: foreign sites go through it, Russian sites open
+directly, by themselves.
 
 ## What runet-direct does
 

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>runet-direct — Russian sites outside your VPN</title>
-<meta name="description" content="Russian banks, government portals, marketplaces and mail open directly; everything else keeps using your VPN. Works with any VPN. Windows, macOS, Linux. Free and open source.">
+<title>runet-direct — keep your VPN on, Russian sites still work</title>
+<meta name="description" content="Turn the VPN on and forget it: foreign sites go through the VPN, Russian sites go direct. Banks, Gosuslugi and mail just work. Windows, macOS, Linux. Free and open source.">
 <link rel="canonical" href="https://iresultman.github.io/runet-direct/en/">
 <link rel="alternate" hreflang="ru" href="https://iresultman.github.io/runet-direct/">
 <link rel="alternate" hreflang="en" href="https://iresultman.github.io/runet-direct/en/">
@@ -12,8 +12,8 @@
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <meta name="theme-color" content="#100f0d">
 <meta property="og:type" content="website">
-<meta property="og:title" content="runet-direct — Russian sites outside your VPN">
-<meta property="og:description" content="Russian websites open directly, everything else keeps using your VPN. Free, for Windows, macOS and Linux.">
+<meta property="og:title" content="runet-direct — keep your VPN on, Russian sites still work">
+<meta property="og:description" content="Foreign sites go through the VPN, Russian sites go direct. You never switch the VPN off. Free, for Windows, macOS and Linux.">
 <meta property="og:url" content="https://iresultman.github.io/runet-direct/en/">
 <meta property="og:image" content="https://iresultman.github.io/runet-direct/og.png">
 <meta property="og:locale" content="en_US">
@@ -59,8 +59,8 @@
   </div>
 
   <div class="hero__copy">
-    <h1 id="top-title" class="rise" style="--d:420ms">runet-direct<br>Russian sites, no VPN</h1>
-    <p class="lead rise" style="--d:900ms">Russian banks, government portals and mail open directly. Everything else goes through your VPN, whichever VPN it is.</p>
+    <h1 id="top-title" class="rise" style="--d:420ms">runet-direct<br>VPN always on</h1>
+    <p class="lead rise" style="--d:900ms">Foreign sites go through the VPN, Russian sites go direct. Banks, Gosuslugi and mail open by themselves, no need to switch the VPN off.</p>
     <div class="cta rise" style="--d:1040ms">
       <a id="cta" class="btn btn--fill" href="#install"
          data-label-windows="Download for Windows" data-href-windows="https://github.com/iResultMan/runet-direct/releases/latest/download/runet-direct-setup-x86_64.exe"
@@ -75,6 +75,23 @@
       </a>
       <span class="note">Free, open source, 1.4 MB</span>
     </div>
+  </div>
+</section>
+
+<section id="why" aria-labelledby="why-title">
+  <div class="split">
+    <div>
+      <h2 id="why-title" class="rise">No more switching the VPN</h2>
+      <div class="prose rise" style="--d:100ms">
+        <p>Normally you have to choose. With the VPN on, banks and Gosuslugi do not open or ask for extra verification. With the VPN off, foreign sites stop working. So you switch it back and forth and try to remember what is on right now.</p>
+        <p>With runet-direct the VPN is always on. The service splits the traffic by itself: Russian addresses go direct, everything else goes through the VPN.</p>
+      </div>
+    </div>
+    <dl class="facts rise" style="--d:200ms;margin-top:0">
+      <div><dt>Banks, Gosuslugi, mail</dt><dd>They open at once, as on a plain connection. No need to turn the VPN off.</dd></div>
+      <div><dt>Foreign sites</dt><dd>They use the VPN all the time, not only until you switch it off for a bank.</dd></div>
+      <div><dt>What you do</dt><dd>Nothing. No switching the VPN, no remembering whether it is on.</dd></div>
+    </dl>
   </div>
 </section>
 
@@ -183,6 +200,8 @@ Health:   <span class="ok">OK</span></pre>
 <section id="faq" aria-labelledby="faq-title">
   <h2 id="faq-title" class="rise">Questions</h2>
   <div class="faq rise" style="--d:100ms">
+    <details><summary>Do I have to switch anything on or off together with the VPN?</summary><div>
+      <p>No. The service runs all the time and does not depend on whether the VPN is on at that moment. Turn the VPN on once and forget it: Russian sites go direct, the rest goes through it.</p></div></details>
     <details><summary>Is it safe?</summary><div>
       <p>The program does not read or intercept traffic. It only adds routes to the system table and removes them when you uninstall it. The code is open under the MIT license. Release files carry checksums and a build-provenance attestation.</p></div></details>
     <details><summary>Where does it connect?</summary><div>

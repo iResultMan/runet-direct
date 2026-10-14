@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>runet-direct — рунет мимо VPN</title>
-<meta name="description" content="Банки, Госуслуги, маркетплейсы и почта открываются напрямую, остальное идёт через VPN. Работает с любым VPN. Windows, macOS, Linux. Бесплатно, открытый код.">
+<title>runet-direct — VPN включён всегда, российские сайты работают</title>
+<meta name="description" content="Включили VPN и забыли: зарубежные сайты идут через VPN, российские напрямую. Банки, Госуслуги и почта работают сами. Windows, macOS, Linux. Бесплатно, открытый код.">
 <link rel="canonical" href="https://iresultman.github.io/runet-direct/">
 <link rel="alternate" hreflang="ru" href="https://iresultman.github.io/runet-direct/">
 <link rel="alternate" hreflang="en" href="https://iresultman.github.io/runet-direct/en/">
@@ -12,8 +12,8 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <meta name="theme-color" content="#100f0d">
 <meta property="og:type" content="website">
-<meta property="og:title" content="runet-direct — рунет мимо VPN">
-<meta property="og:description" content="Российские сайты открываются напрямую, остальное идёт через ваш VPN. Бесплатно, для Windows, macOS и Linux.">
+<meta property="og:title" content="runet-direct — VPN включён всегда, российские сайты работают">
+<meta property="og:description" content="Зарубежные сайты идут через VPN, российские напрямую. VPN не нужно выключать. Бесплатно, для Windows, macOS и Linux.">
 <meta property="og:url" content="https://iresultman.github.io/runet-direct/">
 <meta property="og:image" content="https://iresultman.github.io/runet-direct/og.png">
 <meta property="og:locale" content="ru_RU">
@@ -59,8 +59,8 @@
   </div>
 
   <div class="hero__copy">
-    <h1 id="top-title" class="rise" style="--d:420ms">runet-direct<br>рунет мимо VPN</h1>
-    <p class="lead rise" style="--d:900ms">Банки, Госуслуги и почта открываются напрямую. Всё остальное идёт через ваш VPN, какой бы он ни был.</p>
+    <h1 id="top-title" class="rise" style="--d:420ms">runet-direct<br>VPN включён всегда</h1>
+    <p class="lead rise" style="--d:900ms">Зарубежное идёт через VPN, российское напрямую. Банки, Госуслуги и почта открываются сами, VPN выключать не нужно.</p>
     <div class="cta rise" style="--d:1040ms">
       <a id="cta" class="btn btn--fill" href="#install"
          data-label-windows="Скачать для Windows" data-href-windows="https://github.com/iResultMan/runet-direct/releases/latest/download/runet-direct-setup-x86_64.exe"
@@ -75,6 +75,23 @@
       </a>
       <span class="note">Бесплатно, открытый код, 1,4 МБ</span>
     </div>
+  </div>
+</section>
+
+<section id="why" aria-labelledby="why-title">
+  <div class="split">
+    <div>
+      <h2 id="why-title" class="rise">Переключать VPN больше не нужно</h2>
+      <div class="prose rise" style="--d:100ms">
+        <p>Обычно приходится выбирать. С включённым VPN не открываются банки и Госуслуги или просят лишнее подтверждение. С выключенным не работают зарубежные сайты. Остаётся переключать VPN туда и обратно и помнить, что сейчас включено.</p>
+        <p>С runet-direct VPN включён всегда. Служба сама разводит трафик: российские адреса идут напрямую, всё остальное через VPN.</p>
+      </div>
+    </div>
+    <dl class="facts rise" style="--d:200ms;margin-top:0">
+      <div><dt>Банки, Госуслуги, почта</dt><dd>Открываются сразу, как при обычном интернете. VPN выключать не нужно.</dd></div>
+      <div><dt>Зарубежные сайты</dt><dd>Идут через VPN всё время, а не только пока вы не отключили его ради банка.</dd></div>
+      <div><dt>Что делаете вы</dt><dd>Ничего. Не нужно ни переключать VPN, ни помнить, включён ли он.</dd></div>
+    </dl>
   </div>
 </section>
 
@@ -183,6 +200,8 @@ Health:   <span class="ok">OK</span></pre>
 <section id="faq" aria-labelledby="faq-title">
   <h2 id="faq-title" class="rise">Вопросы</h2>
   <div class="faq rise" style="--d:100ms">
+    <details><summary>Нужно ли что-то включать и выключать вместе с VPN?</summary><div>
+      <p>Нет. Служба работает постоянно и не зависит от того, включён ли VPN в этот момент. Включили VPN один раз и забыли: российские сайты работают напрямую, остальные через него.</p></div></details>
     <details><summary>Безопасно ли это?</summary><div>
       <p>Программа не читает и не перехватывает трафик. Она только добавляет маршруты в таблицу системы и убирает их, когда вы её удаляете. Код открыт и лежит под лицензией MIT. У файлов релиза есть контрольные суммы и подтверждение происхождения сборки.</p></div></details>
     <details><summary>Куда программа ходит в сеть?</summary><div>
