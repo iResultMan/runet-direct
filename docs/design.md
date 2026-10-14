@@ -58,7 +58,13 @@ last-resort name hint for virtual links.
    one in `config.toml`. The shadow guard only ever moves *our* rule, and only above a rule that actually diverts
    the probe into a tunnel.
 7. **Locale independence on Windows.** Only JSON from PowerShell and the numeric rows of `route print` are parsed.
-8. **Temporary entries expire by themselves.** Expiry is enforced by the daemon (it wakes at the exact moment), not
+8. **Only the daemon (and `refresh`) downloads.** Quick commands such as `add` never wait for the 18 MB file, and each
+   process downloads into its own temporary file, so two of them can never mix. While the daemon is downloading it
+   does not react to network events; the download takes seconds on a normal link, and the next pass catches up.
+9. **A diversion that cannot be fixed is still reported.** If a rule that is not a plain `from all` rule (fwmark,
+   `not`, `to` ...) sends the probe into a tunnel, it cannot be moved above automatically, but the daemon logs it
+   and `check` / `status` fail instead of staying quiet.
+10. **Temporary entries expire by themselves.** Expiry is enforced by the daemon (it wakes at the exact moment), not
    by the caller, so a crashed controller cannot leave a forgotten exclusion behind.
 
 ## IPv4 and IPv6

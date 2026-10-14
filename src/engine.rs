@@ -119,7 +119,7 @@ pub fn load_desired(paths: &Paths, cfg: &Config, state: &State, now: u64) -> Des
 fn expire_manual(paths: &Paths, now: u64) {
     let Ok(text) = fs::read_to_string(paths.manual_file()) else { return };
     let (cleaned, gone) = sources::drop_expired(&text, now);
-    if !gone.is_empty() && fs::write(paths.manual_file(), cleaned).is_ok() {
+    if !gone.is_empty() && crate::util::write_atomic(&paths.manual_file(), cleaned).is_ok() {
         log::info(format!("temporary entries expired: {}", gone.join(", ")));
     }
 }
@@ -179,7 +179,8 @@ pub struct Fetched {
 }
 
 pub fn fetch_country(cfg: &Config, paths: &Paths, bind_iface: Option<&str>) -> Result<Fetched, String> {
-    let tmp = paths.state_dir.join("download.tmp");
+    // One file per process: a daemon and a one-shot command can never write into the same download.
+    let tmp = paths.state_dir.join(format!("download.{}.tmp", std::process::id()));
     let _ = paths.ensure_dirs();
     log::info(format!("downloading {}", cfg.ru.source_url));
     let result = fetch::download(&cfg.ru.source_url, &tmp, bind_iface).and_then(|()| {
@@ -373,7 +374,11 @@ pub fn reconcile(cfg: &Config, net: &dyn Net, state: &mut State, desired: &Desir
 
 #[derive(Default)]
 pub struct CycleOpts {
+    /// Download now, whatever the schedule says.
     pub force_refresh: bool,
+    /// Download when the schedule says it is due. Only the daemon and explicit refreshes may: a quick
+    /// command such as `add` must never hang on an 18 MB download.
+    pub allow_fetch: bool,
 }
 
 pub struct Cycle {
@@ -385,7 +390,7 @@ pub struct Cycle {
 pub fn cycle(paths: &Paths, cfg: &Config, net: &dyn Net, opts: &CycleOpts) -> Result<Cycle, String> {
     let now = log::now();
     let pre = State::load(paths);
-    let want_fetch = cfg.ru.enabled && (opts.force_refresh || needs_refresh(cfg, &pre, now));
+    let want_fetch = cfg.ru.enabled && (opts.force_refresh || (opts.allow_fetch && needs_refresh(cfg, &pre, now)));
     let fetched = if want_fetch {
         let dev = cfg.families().into_iter().find_map(|f| net.uplink(cfg, f).ok().flatten()).map(|u| u.dev);
         let dev = dev.filter(|d| d.parse::<u32>().is_err()); // Windows reports an index, not a name
@@ -616,7 +621,7 @@ pub fn health(paths: &Paths, cfg: &Config, net: &dyn Net) -> Health {
 // Daemon
 // ---------------------------------------------------------------------------
 
-fn spawn_watcher(cmd: Vec<String>, ignore: String) -> Receiver<()> {
+fn spawn_watcher(cmd: Vec<String>, ignore: Vec<String>) -> Receiver<()> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || loop {
         use std::io::BufRead;
@@ -625,7 +630,7 @@ fn spawn_watcher(cmd: Vec<String>, ignore: String) -> Receiver<()> {
             Ok(mut child) => {
                 if let Some(out) = child.stdout.take() {
                     for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
-                        if ignore.is_empty() || !line.contains(&ignore) {
+                        if !ignore.iter().any(|i| line.contains(i.as_str())) {
                             let _ = tx.send(());
                         }
                     }
@@ -657,7 +662,7 @@ pub fn run_daemon(paths: &Paths, net: &dyn Net) -> ! {
     if let Ok(c) = Config::load(&paths.config_file()) {
         cfg = c;
     }
-    let events = net.watch_command().map(|cmd| spawn_watcher(cmd, format!(" table {}", cfg.routing.table)));
+    let events = net.watch_command().map(|cmd| spawn_watcher(cmd, net.echo_filters(&cfg)));
     let mut last_err = String::new();
     let mut last_uplinks: BTreeMap<&'static str, Option<String>> = BTreeMap::new();
     let mut last_skipped: BTreeMap<&'static str, Option<String>> = BTreeMap::new();
@@ -673,7 +678,7 @@ pub fn run_daemon(paths: &Paths, net: &dyn Net) -> ! {
                 }
             }
         }
-        match cycle(paths, &cfg, net, &CycleOpts::default()) {
+        match cycle(paths, &cfg, net, &CycleOpts { allow_fetch: true, ..CycleOpts::default() }) {
             Ok(c) => {
                 last_err.clear();
                 for f in &c.report.families {
@@ -719,6 +724,8 @@ pub fn run_daemon(paths: &Paths, net: &dyn Net) -> ! {
             }
         }
         if std::mem::take(&mut rerun) {
+            // A flapping link must not turn into a tight loop of `ip` commands.
+            std::thread::sleep(Duration::from_secs(2));
             continue;
         }
         let mut wait = Duration::from_secs(cfg.daemon.interval_seconds.max(5));

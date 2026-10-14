@@ -110,6 +110,11 @@ pub trait Net {
     /// Long-running command whose output lines signal network changes, if the OS has one.
     fn watch_command(&self) -> Option<Vec<String>>;
 
+    /// Substrings that mark a change-notification line as the echo of our own work (it is then ignored).
+    fn echo_filters(&self, _: &Config) -> Vec<String> {
+        Vec::new()
+    }
+
     /// True when routes live in the shared table, so ownership must be tracked in `State`.
     fn tracks_ownership(&self) -> bool;
 }

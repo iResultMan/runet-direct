@@ -229,7 +229,9 @@ impl Net for Windows {
     }
 
     fn apply(&self, _: &Config, fam: Family, uplink: &Uplink, plan: &Plan) -> Result<(), String> {
-        let path = std::env::temp_dir().join(format!("runet-direct-routes-{}.netsh", fam.key()));
+        let dir = crate::config::Paths::detect().state_dir;
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("routes-{}.netsh", fam.key()));
         std::fs::write(&path, netsh_script(fam, uplink, plan)).map_err(|e| e.to_string())?;
         let result = util::run("netsh", &["-f", &path.to_string_lossy()]);
         let _ = std::fs::remove_file(&path);

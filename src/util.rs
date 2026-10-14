@@ -45,6 +45,16 @@ fn failure_text(program: &str, out: &std::process::Output) -> String {
     format!("`{program}` failed ({}): {}", out.status, tail.join(" | "))
 }
 
+/// Write a file so that a reader sees either the old or the new content, never half of it.
+pub fn write_atomic(path: &std::path::Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, data)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
 /// Run a command, discarding output; true when it exited successfully.
 pub fn ok(program: &str, args: &[&str]) -> bool {
     Command::new(program).args(args).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
@@ -62,4 +72,19 @@ pub fn is_root() -> bool {
 #[cfg(not(unix))]
 pub fn is_root() -> bool {
     false
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn write_atomic_replaces_the_content_and_leaves_no_temp_files() {
+        let dir = std::env::temp_dir().join(format!("rd-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("manual.list");
+        super::write_atomic(&f, "one\n").unwrap();
+        super::write_atomic(&f, "two\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "two\n");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "only the target remains");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

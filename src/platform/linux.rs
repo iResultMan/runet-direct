@@ -162,6 +162,13 @@ pub enum RuleOp {
     Stuck {
         shadow: u32,
     },
+    /// Traffic that must be direct goes into a tunnel because of a rule that is not a plain
+    /// `from all lookup` (fwmark, `not`, `to` ...). It cannot be moved above automatically, but it must
+    /// not stay silent either.
+    Leak {
+        rule: u32,
+        table: u32,
+    },
 }
 
 /// `probe`: where the answer for a destination that must be direct came from, and whether that
@@ -177,7 +184,13 @@ pub fn plan_rule(rules: &[Rule], table: u32, preferred: u32, probe: Option<(u32,
     match shadow {
         Some(s) if s > 1 => RuleOp::Move { from: mine, to: s - 1, shadow: s },
         Some(s) => RuleOp::Stuck { shadow: s },
-        None => RuleOp::Nothing,
+        None => {
+            match rules.iter().filter(|r| r.table == Some(answered_from) && r.priority < mine && r.priority > 0).map(|r| r.priority).min() {
+                Some(rule) => RuleOp::Leak { rule, table: answered_from },
+                // Nothing in front of ours points there: the route itself is missing, which the next pass repairs.
+                None => RuleOp::Nothing,
+            }
+        }
     }
 }
 
@@ -225,6 +238,16 @@ pub fn is_tunnel(dev: &str) -> bool {
     }
     let link_type: Option<u32> = fs::read_to_string(format!("{base}/type")).ok().and_then(|s| s.trim().parse().ok());
     matches!(link_type, Some(t) if t != 1)
+}
+
+/// `ip monitor` prints the table's label instead of its number when rt_tables names it, so both forms
+/// mark the echo of our own work.
+pub fn echo_filters_for(table: u32, labels: &HashMap<String, u32>) -> Vec<String> {
+    let mut filters = vec![format!(" table {table}")];
+    let mut names: Vec<&String> = labels.iter().filter(|(_, id)| **id == table).map(|(n, _)| n).collect();
+    names.sort();
+    filters.extend(names.into_iter().map(|n| format!(" table {n}")));
+    filters
 }
 
 fn rt_labels() -> HashMap<String, u32> {
@@ -321,6 +344,9 @@ impl Net for Linux {
                     "{prefix}rule moved from priority {from} to {to}: another rule at {shadow} was sending Russian traffic into the VPN"
                 )))
             }
+            RuleOp::Leak { rule, table } => Err(format!(
+                "Russian traffic still leaves through a tunnel: the rule at priority {rule} (lookup {table}) is evaluated first and is not a plain `from all` rule, so it cannot be moved above automatically"
+            )),
             RuleOp::Stuck { shadow } => {
                 Err(format!("a rule at priority {shadow} sends Russian traffic into the VPN and nothing can be placed above it"))
             }
@@ -376,6 +402,10 @@ impl Net for Linux {
         let text = ip(&[Family::of(&addr).ip_flag(), "route", "get", &addr.to_string()])?;
         let g = parse_route_get(&text, &rt_labels()).ok_or_else(|| format!("unexpected `ip route get` output: {}", text.trim()))?;
         Ok(Lookup { tunnel: is_tunnel(&g.dev), dev: g.dev, via: g.via })
+    }
+
+    fn echo_filters(&self, cfg: &Config) -> Vec<String> {
+        echo_filters_for(cfg.routing.table, &rt_labels())
     }
 
     fn watch_command(&self) -> Option<Vec<String>> {
@@ -531,6 +561,26 @@ mod tests {
         assert_eq!(plan_rule(&rules, 900, 2500, Some((880, true))), RuleOp::Move { from: 2500, to: 499, shadow: 500 });
         let behind = parse_rules("2500:\tfrom all lookup runet\n30801:\tfrom all lookup 880\n", &labels());
         assert_eq!(plan_rule(&behind, 900, 2500, Some((880, true))), RuleOp::Nothing, "a rule behind ours cannot shadow it");
+    }
+
+    #[test]
+    fn the_echo_filter_knows_the_table_by_number_and_by_label() {
+        assert_eq!(echo_filters_for(900, &labels()), [" table 900", " table runet"]);
+        assert_eq!(echo_filters_for(901, &labels()), [" table 901"]);
+    }
+
+    #[test]
+    fn a_non_plain_rule_in_front_is_reported_not_ignored() {
+        let rules = parse_rules("1000:\tnot from all fwmark 0x1 lookup 880\n2500:\tfrom all lookup runet\n", &labels());
+        assert_eq!(plan_rule(&rules, 900, 2500, Some((880, true))), RuleOp::Leak { rule: 1000, table: 880 });
+        let to_net = parse_rules("900:\tfrom all to 8.0.0.0/8 lookup 880\n2500:\tfrom all lookup runet\n", &labels());
+        assert!(matches!(plan_rule(&to_net, 900, 2500, Some((880, true))), RuleOp::Leak { rule: 900, .. }));
+    }
+
+    #[test]
+    fn nothing_in_front_means_the_route_is_missing_not_a_shadow() {
+        let rules = parse_rules("2500:\tfrom all lookup runet\n30801:\tfrom all lookup 880\n", &labels());
+        assert_eq!(plan_rule(&rules, 900, 2500, Some((880, true))), RuleOp::Nothing);
     }
 
     #[test]

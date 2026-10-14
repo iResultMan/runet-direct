@@ -249,6 +249,12 @@ nsx ip -6 route add default dev wg-other table 880
 nsx ip -6 rule add priority 700 from all lookup 880
 wait_for 10 "IPv6: rule at 700 shadowed ours -> moved above it (699)" has_rule 6 699
 expect "IPv6: russian traffic direct again" goes 2a02:6b8::1 dummy0
+# A diverting rule that is NOT a plain `from all` rule cannot be moved above; it must still be reported.
+nsx ip rule add priority 300 not from all fwmark 0x7 lookup 880
+wait_for 10 "a fwmark-style diverting rule is reported by the daemon, not ignored" bash -c "grep -q 'not a plain' '$WORK/daemon.log'"
+expect_not "check flags the leak while that rule exists" rd check
+nsx ip rule del priority 300 not from all fwmark 0x7 lookup 880
+wait_for 12 "check is healthy again once the rule is gone" rd check
 grep -q "rule moved" "$WORK/daemon.log" && ok "the moves are logged" || die "no log line about the move"
 set +e; rd status --json >"$WORK/s2.json"; set -e
 python3 -c "

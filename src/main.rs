@@ -201,6 +201,15 @@ fn load_config(paths: &Paths) -> Config {
     Config::load(&paths.config_file()).unwrap_or_else(|e| die(format!("bad configuration: {e}")))
 }
 
+/// For the commands that must work even when the configuration is broken (`clear`, `uninstall`): fall
+/// back to the defaults and say so.
+fn load_config_lenient(paths: &Paths) -> Config {
+    Config::load(&paths.config_file()).unwrap_or_else(|e| {
+        eprintln!("warning: ignoring the broken configuration ({e}); using the defaults");
+        Config::default()
+    })
+}
+
 fn need_admin(net: &dyn Net) {
     if let Err(e) = net.require_admin() {
         die(e);
@@ -231,7 +240,7 @@ fn main() {
         Cmd::Refresh => apply(&paths, net.as_ref(), true),
         Cmd::Clear => {
             need_admin(net.as_ref());
-            match engine::clear(&paths, &load_config(&paths), net.as_ref()) {
+            match engine::clear(&paths, &load_config_lenient(&paths), net.as_ref()) {
                 Ok(n) => println!("removed {n} routes and the routing rule"),
                 Err(e) => die(e),
             }
@@ -303,11 +312,12 @@ fn install(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, no_start: b
         return;
     }
     mgr.start().unwrap_or_else(|e| die(e));
-    println!("started; waiting for the first sync (downloads the country address list, ~10 MB)...");
+    let cfg = load_config_lenient(paths);
+    println!("started; waiting for the first sync (downloads the country address list, ~18 MB)...");
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(150) {
         let s = State::load(paths);
-        if s.ru.is_some() && !s.uplinks.is_empty() {
+        if (s.ru.is_some() || !cfg.ru.enabled) && !s.uplinks.is_empty() {
             let n = s.last_apply.map(|a| a.total).unwrap_or(0);
             println!("done: {n} routes installed. Check anytime with `runet-direct status`.");
             return;
@@ -323,7 +333,7 @@ fn install(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, no_start: b
 
 fn uninstall(paths: &Paths, net: &dyn Net, mgr: &dyn service::Manager, purge: bool) {
     need_admin(net);
-    let cfg = load_config(paths);
+    let cfg = load_config_lenient(paths);
     let _ = mgr.stop();
     match engine::clear(paths, &cfg, net) {
         Ok(n) => println!("removed {n} routes and the routing rule"),
@@ -494,7 +504,9 @@ fn apply(paths: &Paths, net: &dyn Net, force_refresh: bool) {
     need_admin(net);
     let cfg = load_config(paths);
     let _ = paths.write_defaults();
-    match engine::cycle(paths, &cfg, net, &engine::CycleOpts { force_refresh }) {
+    // A quick command must not hang on an 18 MB download: fetch only on `refresh`, or when there is no list at all.
+    let allow_fetch = force_refresh || State::load(paths).ru.is_none();
+    match engine::cycle(paths, &cfg, net, &engine::CycleOpts { force_refresh, allow_fetch }) {
         Ok(c) => {
             for r in &c.report.families {
                 if let Some(msg) = &r.skipped {
@@ -541,7 +553,7 @@ fn edit_manual(paths: &Paths, net: &dyn Net, targets: &[Target], verdict: Option
                 }
             }
         }
-        std::fs::write(paths.manual_file(), text).unwrap_or_else(|e| die(format!("{}: {e}", paths.manual_file().display())));
+        util::write_atomic(&paths.manual_file(), text).unwrap_or_else(|e| die(format!("{}: {e}", paths.manual_file().display())));
     }
     apply(paths, net, false);
 }
@@ -617,7 +629,7 @@ fn config_cmd(paths: &Paths, net: &dyn Net, action: Option<ConfigCmd>) {
             if let Err(e) = toml::from_str::<Config>(&new_text) {
                 die(format!("refused, the result would be invalid: {e}"));
             }
-            std::fs::write(paths.config_file(), new_text).unwrap_or_else(|e| die(format!("{}: {e}", paths.config_file().display())));
+            util::write_atomic(&paths.config_file(), new_text).unwrap_or_else(|e| die(format!("{}: {e}", paths.config_file().display())));
             println!("{key} = {value}");
             apply(paths, net, false);
         }
