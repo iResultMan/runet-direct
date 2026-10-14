@@ -208,8 +208,11 @@ Health:   <span class="ok">OK</span></pre>
       <p>Once a month it downloads the address list from RIPE NCC. Nowhere else. No telemetry, no account.</p></div></details>
     <details><summary>What if the VPN disconnects?</summary><div>
       <p>Russian addresses keep going direct; everything else behaves the way your system is set up. The service does not need the VPN.</p></div></details>
+    <details><summary>How do I send one site through the VPN?</summary><div>
+      <p>Paste the link straight from the browser: <code>sudo runet-direct exclude https://site.ru/any-page</code>. You do not need to know any address ranges: the program takes the addresses the site name points to right now and refreshes them every few hours. To undo: <code>sudo runet-direct remove site.ru</code>. For a limited time: add <code>--for 1h</code>.</p>
+      <p>If a site has very many addresses (it sits behind a delivery network), it may not work for all of them at once: check with <code>runet-direct check site.ru</code>.</p></div></details>
     <details><summary>One site still opens through the VPN. Why?</summary><div>
-      <p>The list is built from Russian address blocks. A site behind a foreign delivery network is not in it. Add it by hand: <code>runet-direct add site-name.ru</code>. Verify with <code>runet-direct check site-name.ru</code>.</p></div></details>
+      <p>The list is built from Russian address blocks. A site behind a foreign delivery network is not in it. Add it by hand; pasting a link works: <code>sudo runet-direct add https://site-name.ru</code>. Verify with <code>runet-direct check site-name.ru</code>.</p></div></details>
     <details><summary>Does it work with IPv6?</summary><div>
       <p>Yes. IPv4 and IPv6 are switched separately. If you have no IPv6, the service simply skips it.</p></div></details>
     <details><summary>How do I uninstall it?</summary><div>

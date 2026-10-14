@@ -19,7 +19,7 @@ mkdir -p "$RUNET_DIRECT_HOME"
 cleanup() {
   [[ -n "$DAEMON_PID" ]] && kill "$DAEMON_PID" 2>/dev/null || true
   ip netns del "$NS" 2>/dev/null || true
-  rm -rf "$WORK"
+  rm -rf "$WORK" "/etc/netns/$NS"
 }
 trap cleanup EXIT
 
@@ -131,6 +131,23 @@ rd remove 5.228.1.0/24 2a02:6b8:1::/48 1.2.3.4 2001:db8:77::/48 >/dev/null
 expect "after remove the IPv4 slice is direct again" rd check 5.228.1.9
 expect "after remove the IPv6 slice is direct again" rd check 2a02:6b8:1::9
 expect_not "after remove the host is back in the VPN" rd check 1.2.3.4
+
+step "a person pastes a link to one site (a name, not a range)"
+mkdir -p "/etc/netns/$NS"
+printf '213.59.9.9 shop.example.test\n8.8.4.4 abroad.example.test\n' > "/etc/netns/$NS/hosts"
+expect "a Russian-range site is direct before" rd check 213.59.9.9
+rd exclude "https://Shop.Example.test:8443/cart?id=1#pay" >/dev/null
+expect_not "pasted link: the site now goes through the VPN" rd check 213.59.9.9
+expect "the rest of its block stays direct" rd check 213.59.9.10
+rd list | grep -q "shop.example.test" && ok "the list stores the plain host name" || die "list does not show the host"
+rd remove "shop.example.test/anything" >/dev/null
+expect "removing by link brings the site back" rd check 213.59.9.9
+expect_not "a foreign-hosted site is in the VPN before" rd check 8.8.4.4
+rd add "http://abroad.example.test/page" >/dev/null
+expect "pasted link: a foreign-hosted site can be sent direct" rd check 8.8.4.4
+rd remove abroad.example.test >/dev/null
+expect_not "and removed again" rd check 8.8.4.4
+expect_not "garbage is refused with a clear message" rd add "https://"
 
 step "each family can be switched off on its own"
 rd config set ipv6.enabled false >/dev/null

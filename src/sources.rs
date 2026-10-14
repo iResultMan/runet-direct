@@ -118,7 +118,34 @@ impl Entry {
     }
 }
 
+/// The host part of something a person might paste: `https://user@www.site.ru:8443/a/b?x=1#top`,
+/// `site.ru/page`, `[2001:db8::1]:443`. Anything without a path or port comes back unchanged.
+fn host_of(s: &str) -> &str {
+    let s = s.trim();
+    let s = s.split_once("://").map_or(s, |(scheme, rest)| {
+        if scheme.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.') {
+            rest
+        } else {
+            s
+        }
+    });
+    let s = s.split(['/', '?', '#']).next().unwrap_or(s);
+    let s = s.rsplit_once('@').map_or(s, |(_, host)| host);
+    if let Some(rest) = s.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or(rest); // [ipv6]:port
+    }
+    match s.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => host,
+        _ => s,
+    }
+}
+
 pub fn parse_target(s: &str) -> Result<Target, String> {
+    if let Some(c) = Cidr::parse(s) {
+        return Ok(Target::Net(c));
+    }
+    let original = s;
+    let s = host_of(s);
     if let Some(c) = Cidr::parse(s) {
         return Ok(Target::Net(c));
     }
@@ -126,7 +153,7 @@ pub fn parse_target(s: &str) -> Result<Target, String> {
     let host = s.trim_end_matches('.').to_ascii_lowercase();
     let valid_chars = host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.' || b == b'_');
     if looks_numeric || !valid_chars || host.len() > 253 || !host.contains('.') || host.starts_with('.') || host.contains("..") {
-        return Err(format!("`{s}` is neither an IPv4 address/CIDR nor a domain name"));
+        return Err(format!("`{original}` is not an address, a network, a domain name or a link to a site"));
     }
     Ok(Target::Host(host))
 }
@@ -321,6 +348,26 @@ mod tests {
         assert_eq!(errs.len(), 2);
         assert!(errs[0].starts_with("line 5"));
         assert!(errs[1].starts_with("line 6"));
+    }
+
+    #[test]
+    fn a_pasted_link_is_reduced_to_its_site() {
+        let host = |s: &str| Target::Host(s.into());
+        assert_eq!(parse_target("https://www.Site.ru:8443/a/b?x=1#top").unwrap(), host("www.site.ru"));
+        assert_eq!(parse_target("http://user:pw@bank.example.ru/login").unwrap(), host("bank.example.ru"));
+        assert_eq!(parse_target("site.ru/page").unwrap(), host("site.ru"));
+        assert_eq!(parse_target("site.ru:8080").unwrap(), host("site.ru"));
+        assert_eq!(parse_target("  https://site.ru  ").unwrap(), host("site.ru"));
+        assert_eq!(parse_target("http://1.2.3.4/x").unwrap(), Target::Net(Cidr::parse("1.2.3.4").unwrap()));
+        assert_eq!(parse_target("https://[2001:db8::1]:443/x").unwrap(), Target::Net(Cidr::parse("2001:db8::1").unwrap()));
+        assert_eq!(
+            parse_target("1.2.3.0/24").unwrap(),
+            Target::Net(Cidr::parse("1.2.3.0/24").unwrap()),
+            "a network is not mistaken for a path"
+        );
+        for bad in ["http://", "https:///x", "https://localhost/x", "mailto:me@site", "https://exa mple.ru"] {
+            assert!(parse_target(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
