@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.1
 
 - Linux: IPv6 now follows the IPv4 uplink. A second link (a phone over USB, Wi-Fi) that advertises an IPv6 gateway
   while the wired link has none is no longer used for direct IPv6; it could pass the TCP handshake yet drop the data,

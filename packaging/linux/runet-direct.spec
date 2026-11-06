@@ -44,5 +44,8 @@ exit 0
 %doc /usr/share/doc/runet-direct/README.ru.md
 
 %changelog
+* Fri Nov 06 2026 iResultMan <i.result.man@gmail.com> - 1.0.1-1
+- IPv6 follows the IPv4 uplink and its routes are removed when the gateway is gone
+
 * Wed Oct 14 2026 iResultMan <i.result.man@gmail.com> - 1.0.0-1
 - Initial package
