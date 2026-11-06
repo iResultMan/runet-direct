@@ -15,7 +15,7 @@ jobs:
   check-version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Tag matches Cargo.toml
         run: |
           tag="${GITHUB_REF_NAME#v}"
@@ -37,7 +37,7 @@ jobs:
           - { os: macos-latest,     target: aarch64-apple-darwin,       pack: tar }
           - { os: windows-latest,   target: x86_64-pc-windows-msvc,     pack: zip }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -83,7 +83,7 @@ jobs:
     name: .deb and .rpm
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           pattern: raw-*-linux-musl
@@ -107,7 +107,7 @@ jobs:
     name: macOS .pkg
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           pattern: raw-*-apple-darwin
@@ -131,7 +131,7 @@ jobs:
     name: Windows setup.exe
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: raw-x86_64-pc-windows-msvc
