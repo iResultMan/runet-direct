@@ -32,9 +32,8 @@ jobs:
       - name: Routing behaviour in a throw-away network namespace
         run: sudo tests/linux-netns.sh target/debug/runet-direct
       - name: Service lifecycle (disposable runner; downloads the real RIPE file)
-        run: sudo -E tests/linux-service.sh target/debug/runet-direct
-        env:
-          RUNET_TEST_DISPOSABLE: "1"
+        # `env` passes the variable through any sudo; the newer sudo-rs ignores `-E`.
+        run: sudo env RUNET_TEST_DISPOSABLE=1 tests/linux-service.sh target/debug/runet-direct
       - name: The .deb installs, runs and removes cleanly
         run: |
           packaging/linux/build-deb.sh target/debug/runet-direct amd64 0.0.0-ci /tmp/runet-direct.deb

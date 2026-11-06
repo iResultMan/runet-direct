@@ -3,7 +3,7 @@
 # manual list, uninstall. It really installs the service, so run it only on a disposable
 # machine (a CI runner or a container); it refuses to run otherwise.
 #
-#   RUNET_TEST_DISPOSABLE=1 sudo -E tests/linux-service.sh [path/to/runet-direct]
+#   sudo env RUNET_TEST_DISPOSABLE=1 tests/linux-service.sh [path/to/runet-direct]
 #
 # RUNET_TEST_RIPE_FILE=/path/to/delegated-file makes the run offline.
 set -euo pipefail
