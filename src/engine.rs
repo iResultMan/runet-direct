@@ -307,14 +307,24 @@ fn reconcile_family(cfg: &Config, net: &dyn Net, state: &mut State, desired: &De
     let was_active = state.active.contains(&key_of(fam));
 
     // A machine without IPv6 must not turn into a permanent error: treat "cannot tell" as "none".
+    let mut cannot_tell = false;
     let uplink = match net.uplink(cfg, fam) {
         Ok(u) => u,
         Err(e) if fam == Family::V6 => {
             report.skipped = Some(format!("IPv6 is not usable here ({e}); leaving it alone"));
+            cannot_tell = true;
             None
         }
         Err(e) => return Err(e),
     };
+    // IPv6 whose gateway is gone must not keep its routes: they would send Russian traffic into a path
+    // that no longer works, and a browser cannot fall back to IPv4 when the TCP handshake still succeeds.
+    // Without them Russian IPv6 simply follows the machine's normal default route, as before we ran.
+    if fam == Family::V6 && uplink.is_none() && was_active && !cannot_tell {
+        report.removed = clear_family(cfg, net, state, fam)?;
+        report.skipped = Some("no physical IPv6 uplink any more; direct IPv6 routes removed".into());
+        return Ok(report);
+    }
     // IPv4 always gets its rule restored (even while the link is briefly gone); IPv6 only once it is in use.
     if fam == Family::V4 || uplink.is_some() || was_active {
         report.rule_change = net.ensure_rule(cfg, fam, None)?;
@@ -912,6 +922,26 @@ mod tests {
         let r = reconcile(&cfg, &net, &mut st, &d).unwrap();
         assert!(r.families[0].skipped.is_some() && r.families[0].rule_change.is_some());
         assert_eq!(net.table.borrow().len(), 1, "routes must survive a lost uplink");
+    }
+
+    #[test]
+    fn ipv6_routes_do_not_outlive_the_ipv6_uplink() {
+        let net = FakeNet::with(Some(up("10.0.0.1")), Some(up("fe80::1")));
+        let (cfg, mut st) = (Config::default(), State::default());
+        let d = desired(&["5.0.0.0/8"], &["2a00:1450::/32", "2a02:6b8::/32"], true);
+        reconcile(&cfg, &net, &mut st, &d).unwrap();
+        assert_eq!((net.count(Family::V4), net.count(Family::V6)), (1, 2));
+        net.set(Family::V6, None);
+        let r = reconcile(&cfg, &net, &mut st, &d).unwrap();
+        assert_eq!(net.count(Family::V6), 0, "stale IPv6 routes must go");
+        assert_eq!(net.count(Family::V4), 1, "IPv4 is untouched");
+        assert_eq!(r.families[1].removed, 2);
+        assert!(r.changed() && !st.active.contains(&"ipv6".to_string()));
+        // Back again: the routes return, and a second quiet pass changes nothing.
+        net.set(Family::V6, Some(up("fe80::1")));
+        reconcile(&cfg, &net, &mut st, &d).unwrap();
+        assert_eq!(net.count(Family::V6), 2);
+        assert!(!reconcile(&cfg, &net, &mut st, &d).unwrap().changed());
     }
 
     #[test]

@@ -248,6 +248,30 @@ nsx ip -6 route replace default via fd00:77::1 dev dummy0 metric 1024
 wait_for 10 "IPv4 gateway restored -> routes follow" all_via4 10.77.0.1
 wait_for 10 "IPv6 gateway restored -> routes follow" all_via6 fd00:77::1
 
+# A phone over USB: its IPv6 default has a better metric than the wire's, but IPv4 stays on the wire.
+# Russian IPv6 must not hop onto it (it can pass a TCP handshake and still swallow the data).
+nsx ip link add dummy1 type dummy
+nsx ip addr add 10.99.0.2/24 dev dummy1
+nsx ip addr add fd00:99::2/64 dev dummy1 nodad
+nsx ip link set dummy1 up
+nsx ip route add default via 10.99.0.1 dev dummy1 metric 200
+nsx ip -6 route add default via fd00:99::1 dev dummy1 metric 50
+sleep 8
+all_via4 10.77.0.1 && all_via6 fd00:77::1 && is6 2 && ok "a second link with a better IPv6 metric does not take over" || die "IPv6 hopped to the second link: $(nsx ip -6 route show table 900)"
+expect "Russian IPv6 still leaves via the wire" goes 2a02:6b8::1 dummy0
+
+# The wire loses its IPv6 gateway; only the phone has one. No direct IPv6 then, and no stale routes.
+nsx ip -6 route del default via fd00:77::1 dev dummy0
+wait_for 10 "wire lost its IPv6 gateway -> no IPv6 routes are left behind" is6 0
+is4 4 && ok "IPv4 routes untouched" || die "IPv4 changed: $(count4)"
+out=$(rd status || true); grep -q "Health:.*PROBLEMS" <<<"$out" && die "status calls a missing IPv6 uplink a problem: $out" || ok "status stays healthy without an IPv6 uplink"
+expect_not "Russian IPv6 does not go to the wire" goes 2a02:6b8::1 dummy0
+expect_not "Russian IPv6 does not go to the second link either" goes 2a02:6b8::1 dummy1
+nsx ip -6 route add default via fd00:77::1 dev dummy0 metric 1024
+wait_for 10 "wire has IPv6 again -> routes return" is6 2
+expect "returned routes use the wire gateway" all_via6 fd00:77::1
+nsx ip link del dummy1
+
 nsx ip route flush table 900
 nsx ip -6 route flush table 900
 wait_for 30 "tables wiped externally -> rebuilt by the 20 s safety-net check" bash -c "[[ \$(ip netns exec $NS ip -4 route show table 900 | wc -l) -eq 4 && \$(ip netns exec $NS ip -6 route show table 900 | wc -l) -eq 2 ]]"

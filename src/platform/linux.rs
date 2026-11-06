@@ -72,6 +72,17 @@ pub fn pick_uplink(routes: &[DefaultRoute], is_tunnel: &dyn Fn(&str) -> bool, cf
     best(true).or_else(|| best(false))
 }
 
+/// IPv6 follows IPv4: when the IPv4 uplink is known, only default routes on that same interface are
+/// candidates. A second link (a phone over USB, a Wi-Fi) may advertise an IPv6 gateway that carries
+/// the TCP handshake but not the data, and Russian IPv6 must never be sent there just because the
+/// wired link has no IPv6 of its own.
+pub fn only_on_link(mut routes: Vec<DefaultRoute>, dev: Option<&str>) -> Vec<DefaultRoute> {
+    if let Some(dev) = dev {
+        routes.retain(|r| r.dev == dev);
+    }
+    routes
+}
+
 pub fn parse_table(text: &str) -> Vec<Installed> {
     text.lines()
         .filter_map(|line| {
@@ -290,12 +301,16 @@ impl Net for Linux {
 
     fn uplink(&self, cfg: &Config, fam: Family) -> Result<Option<Uplink>, String> {
         let f = fam.ip_flag();
-        let main = parse_default_routes(&ip(&[f, "route", "show", "table", "main"])?);
+        let link = match fam {
+            Family::V6 => self.uplink(cfg, Family::V4).ok().flatten().map(|u| u.dev),
+            Family::V4 => None,
+        };
+        let main = only_on_link(parse_default_routes(&ip(&[f, "route", "show", "table", "main"])?), link.as_deref());
         if let Some(u) = pick_uplink(&main, &is_tunnel, cfg) {
             return Ok(Some(u));
         }
         // A VPN may have removed the original default from main; look in the other tables.
-        let all = parse_default_routes(&ip(&[f, "route", "show", "table", "all", "default"])?);
+        let all = only_on_link(parse_default_routes(&ip(&[f, "route", "show", "table", "all", "default"])?), link.as_deref());
         Ok(pick_uplink(&all, &is_tunnel, cfg))
     }
 
@@ -453,6 +468,20 @@ mod tests {
     fn a_link_that_is_down_loses_to_a_working_one() {
         let r = parse_default_routes("default via 1.1.1.1 dev eth0 metric 10 linkdown\ndefault via 2.2.2.2 dev wlan0 metric 600\n");
         assert_eq!(pick_uplink(&r, &no_tunnels, &Config::default()).unwrap().dev, "wlan0");
+    }
+
+    #[test]
+    fn ipv6_stays_on_the_ipv4_link_and_never_hops_to_a_phone() {
+        // The real case: the wire has no IPv6 gateway, a USB phone (better metric) and Wi-Fi do.
+        let v6 = "default via fe80::1 dev enx7e metric 20101\ndefault via fe80::2 dev wlp4s0 metric 20600\n";
+        assert_eq!(pick_uplink(&only_on_link(parse_default_routes(v6), Some("enp3s0")), &no_tunnels, &Config::default()), None);
+        // When the IPv4 link has IPv6 too, it wins whatever the metrics of the others.
+        let both = format!("{v6}default via fe80::3 dev enp3s0 metric 1024\n");
+        let u = pick_uplink(&only_on_link(parse_default_routes(&both), Some("enp3s0")), &no_tunnels, &Config::default()).unwrap();
+        assert_eq!(u.dev, "enp3s0");
+        // No IPv4 uplink (an IPv6-only network): nothing to follow, the usual choice applies.
+        let u = pick_uplink(&only_on_link(parse_default_routes(v6), None), &no_tunnels, &Config::default()).unwrap();
+        assert_eq!(u.dev, "enx7e");
     }
 
     #[test]

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Linux: IPv6 now follows the IPv4 uplink. A second link (a phone over USB, Wi-Fi) that advertises an IPv6 gateway
+  while the wired link has none is no longer used for direct IPv6; it could pass the TCP handshake yet drop the data,
+  and browsers then hung instead of falling back to IPv4.
+- When the IPv6 uplink disappears, the direct IPv6 routes are removed instead of being left pointing at a dead path.
+
 ## 1.0.0
 
 First release. From here on, semantic versioning applies to what other programs and users rely on:
