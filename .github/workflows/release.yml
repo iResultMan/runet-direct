@@ -64,13 +64,13 @@ jobs:
           $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
           "$hash  $asset" | Out-File -Encoding ascii "$asset.sha256"
       - name: Archives for the install scripts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: archive-${{ matrix.target }}
           path: |
             runet-direct-${{ matrix.target }}.*
       - name: Raw binary for the installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: raw-${{ matrix.target }}
           path: |
@@ -97,7 +97,7 @@ jobs:
           packaging/linux/build-deb.sh raw/raw-aarch64-unknown-linux-musl/runet-direct arm64   "$v" dist/runet-direct-linux-arm64.deb
           packaging/linux/build-rpm.sh raw/raw-x86_64-unknown-linux-musl/runet-direct  x86_64  "$v" dist/runet-direct-linux-x86_64.rpm
           packaging/linux/build-rpm.sh raw/raw-aarch64-unknown-linux-musl/runet-direct aarch64 "$v" dist/runet-direct-linux-aarch64.rpm
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pkg-linux
           path: dist/*
@@ -121,7 +121,7 @@ jobs:
           chmod +x runet-direct-universal
           codesign --force --sign - runet-direct-universal
           packaging/macos/build-pkg.sh runet-direct-universal "$v" dist/runet-direct-macos.pkg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pkg-macos
           path: dist/*
@@ -142,7 +142,7 @@ jobs:
         run: |
           $v = ("${{ github.ref_name }}".TrimStart('v') -split '-')[0]
           .\packaging\windows\build-installer.ps1 -Exe raw\runet-direct.exe -Version $v -Out dist\runet-direct-setup-x86_64.exe
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pkg-windows
           path: dist/*
